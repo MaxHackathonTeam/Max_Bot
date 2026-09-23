@@ -1,0 +1,21 @@
+# Заготовка этапа 0. Домен — из переменной DOMAIN.
+{$DOMAIN} {
+	encode zstd gzip
+
+	@api path /api/* /bot/* /health /ready
+	handle @api {
+		reverse_proxy api:8000
+	}
+
+	# /media/* — volume с обложками (этап 3).
+
+	handle {
+		reverse_proxy web:80
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

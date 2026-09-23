@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# other
+*.code-workspace
+roadmap-max-hackathon.md
+*.pdf
+
+docs/
+
+# frontend
+node_modules/
+frontend/dist/
+*.tsbuildinfo
