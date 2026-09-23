@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Контекст сборки — корень репозитория (нужны backend/ и data/).
 
-FROM ghcr.io/astral-sh/uv:0.12-python3.12-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:0.9.30-python3.12-bookworm-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
