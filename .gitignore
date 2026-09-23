@@ -229,3 +229,4 @@ node_modules/
 frontend/dist/
 *.tsbuildinfo
 CLAUDE.md
+.serena
