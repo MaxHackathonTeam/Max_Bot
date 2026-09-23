@@ -1,0 +1,106 @@
+name: afisha
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  image: afisha-backend:local
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://afisha:afisha@db:5432/afisha}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: afisha
+      POSTGRES_USER: afisha
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-afisha}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U afisha -d afisha"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *backend
+    command: ["arq", "--custom-log-dict", "app.workers.settings.ARQ_LOG_CONFIG", "app.workers.settings.WorkerSettings"]
+    healthcheck:
+      test: ["CMD", "arq", "--check", "app.workers.settings.WorkerSettings"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  bot-poller:
+    <<: *backend
+    command: ["python", "-m", "app.bot.poller"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://afisha:afisha@db:5432/afisha}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      BOT_MODE: polling
+    healthcheck:
+      disable: true
+    profiles: ["local"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend
+    image: afisha-web:local
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  redis-data:

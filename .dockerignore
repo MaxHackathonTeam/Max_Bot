@@ -1,0 +1,13 @@
+# Используется сборкой backend (контекст — корень). Фронтенд собирается со своим frontend/.dockerignore.
+*
+!backend/pyproject.toml
+!backend/uv.lock
+!backend/alembic.ini
+!backend/app
+!data
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.env

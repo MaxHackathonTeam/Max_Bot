@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "stage-*"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy app tests
+      - run: uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Бинарь через Docker: gitleaks-action для организаций требует лицензию.
+      - run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.28.0 git /repo --redact -v
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pull base images
+        run: docker compose pull --ignore-buildable
+      - name: Build (limit 5 min)
+        run: |
+          start=$(date +%s)
+          docker compose build
+          dur=$(( $(date +%s) - start ))
+          echo "Build time: ${dur}s" | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$dur" -le 300
+      - name: Smoke test
+        run: |
+          docker compose up -d --wait --wait-timeout 180 db redis api worker web
+          curl -fsS localhost:8000/health
+          curl -fsS localhost:8000/ready
+          curl -fsS localhost:8080/ | grep -q "Афиша рядом"
+          curl -fsS localhost:8080/api/v1/health
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+      - if: always()
+        run: docker compose down -v
