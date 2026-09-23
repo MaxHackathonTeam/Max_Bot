@@ -37,6 +37,8 @@ def configure_logging(level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(log_level)
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "arq"):
+    for name in ("uvicorn", "uvicorn.error", "arq"):
         logging.getLogger(name).handlers = []
         logging.getLogger(name).propagate = True
+    # Запросы логирует RequestIdMiddleware, access-лог uvicorn дублировал бы их.
+    logging.getLogger("uvicorn.access").disabled = True

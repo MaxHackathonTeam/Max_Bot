@@ -11,6 +11,14 @@ _settings = get_settings()
 configure_logging(_settings.log_level)
 
 
+# Для `arq --custom-log-dict`: не даём arq ставить свой текстовый handler, пишем через root (JSON).
+ARQ_LOG_CONFIG: dict[str, Any] = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "loggers": {"arq": {"handlers": [], "propagate": True}},
+}
+
+
 async def ping(_ctx: dict[str, Any]) -> str:
     return "pong"
 

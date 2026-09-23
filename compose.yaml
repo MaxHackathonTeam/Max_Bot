@@ -61,7 +61,7 @@ services:
 
   worker:
     <<: *backend
-    command: ["arq", "app.workers.settings.WorkerSettings"]
+    command: ["arq", "--custom-log-dict", "app.workers.settings.ARQ_LOG_CONFIG", "app.workers.settings.WorkerSettings"]
     healthcheck:
       test: ["CMD", "arq", "--check", "app.workers.settings.WorkerSettings"]
       interval: 30s
