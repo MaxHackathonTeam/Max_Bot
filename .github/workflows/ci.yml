@@ -15,6 +15,20 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: afisha
+          POSTGRES_PASSWORD: afisha
+          POSTGRES_DB: afisha
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U afisha" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      # Тесты с БД создают свою базу на каждую сессию и ходят под ролью afisha_app.
+      TEST_DATABASE_URL: postgresql+asyncpg://afisha:afisha@localhost:5432/afisha
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -73,6 +87,9 @@ jobs:
           curl -fsS localhost:8000/ready
           curl -fsS localhost:8080/ | grep -q "Афиша рядом"
           curl -fsS localhost:8080/api/v1/health
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/bot/webhook \
+            -H 'X-Max-Bot-Api-Secret: wrong' -d '{}')
+          test "$code" = 401
       - name: Logs on failure
         if: failure()
         run: docker compose logs --tail=200
