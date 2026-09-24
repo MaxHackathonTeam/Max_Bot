@@ -22,11 +22,17 @@ class Settings(BaseSettings):
     bot_mode: Literal["webhook", "polling"] = "polling"
 
     # Хранилища
-    database_url: str = "postgresql+asyncpg://afisha:afisha@db:5432/afisha"
+    # Приложение ходит под ролью afisha_app (без DDL, audit_log только INSERT),
+    # миграции — под владельцем БД.
+    database_url: str = "postgresql+asyncpg://afisha_app:afisha_app@db:5432/afisha"
+    migrate_database_url: str | None = None
+    app_db_password: SecretStr | None = None
     redis_url: str = "redis://redis:6379/0"
 
     # Доступ
     jwt_secret: SecretStr | None = None
+    jwt_ttl_hours: int = 12
+    init_data_max_age_s: int = 24 * 3600
     admin_max_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
     # GigaChat
@@ -62,11 +68,23 @@ class Settings(BaseSettings):
     def _forbid_dev_auth_in_prod(self) -> "Settings":
         if self.env == "prod" and self.dev_auth:
             raise ValueError("DEV_AUTH=1 запрещён при ENV=prod")
+        if self.env == "prod" and self.jwt_secret is None:
+            raise ValueError("JWT_SECRET обязателен при ENV=prod")
+        if self.env == "prod" and self.bot_mode == "webhook" and self.max_webhook_secret is None:
+            raise ValueError("MAX_WEBHOOK_SECRET обязателен при BOT_MODE=webhook и ENV=prod")
         return self
 
     @property
     def is_prod(self) -> bool:
         return self.env == "prod"
+
+    @property
+    def alembic_database_url(self) -> str:
+        return self.migrate_database_url or self.database_url
+
+    @property
+    def webhook_url(self) -> str:
+        return self.public_base_url.rstrip("/") + "/bot/webhook"
 
 
 @lru_cache

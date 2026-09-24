@@ -11,9 +11,11 @@ dependencies = [
     { name = "arq" },
     { name = "asyncpg" },
     { name = "fastapi" },
+    { name = "geoalchemy2" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyjwt" },
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
@@ -25,6 +27,7 @@ dev = [
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "respx" },
     { name = "ruff" },
 ]
 
@@ -34,9 +37,11 @@ requires-dist = [
     { name = "arq", specifier = ">=0.26" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "geoalchemy2", specifier = ">=0.15" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2.8" },
     { name = "pydantic-settings", specifier = ">=2.4" },
+    { name = "pyjwt", specifier = ">=2.9" },
     { name = "redis", specifier = ">=5.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "structlog", specifier = ">=24.1" },
@@ -48,6 +53,7 @@ dev = [
     { name = "mypy", specifier = ">=1.11" },
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "respx", specifier = ">=0.21" },
     { name = "ruff", specifier = ">=0.6" },
 ]
 
@@ -210,6 +216,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8a/02/91e3416a8fdd715abb903a952a6bec7cdd8d14eed55d415fc8595524c319/fastapi-0.141.1.tar.gz", hash = "sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1", size = 425799, upload-time = "2026-07-29T17:18:05.568Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/03/10388a42375ee7e4ac9b94eb2c5c569c8b5795e377e701c9ac3ad63de890/fastapi-0.141.1-py3-none-any.whl", hash = "sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3", size = 131954, upload-time = "2026-07-29T17:18:04.364Z" },
+]
+
+[[package]]
+name = "geoalchemy2"
+version = "0.20.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "sqlalchemy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/63/74/6cb1ef591bf47d28f41aa770f2f3a91c0a570aee0a4083bed7f8c533d8df/geoalchemy2-0.20.0.tar.gz", hash = "sha256:450f427f4bc3cf2d5ddee0af3763aed0f3eea2384e7c9a99798d8f1508279322", size = 280805, upload-time = "2026-05-12T14:50:26.132Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4e/08/b66ad4239f592e05202e25925c08cdd04cc14c3994000ec70ec61fea202c/geoalchemy2-0.20.0-py3-none-any.whl", hash = "sha256:1489a1d106519542a79c97cd0b4c537d80462c353610ebc2429cf2c43daac717", size = 96467, upload-time = "2026-05-12T14:50:24.998Z" },
 ]
 
 [[package]]
@@ -582,6 +601,18 @@ wheels = [
 [package.optional-dependencies]
 hiredis = [
     { name = "hiredis" },
+]
+
+[[package]]
+name = "respx"
+version = "0.23.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/43/98/4e55c9c486404ec12373708d015ebce157966965a5ebe7f28ff2c784d41b/respx-0.23.1.tar.gz", hash = "sha256:242dcc6ce6b5b9bf621f5870c82a63997e8e82bc7c947f9ffe272b8f3dd5a780", size = 29243, upload-time = "2026-04-08T14:37:16.008Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1d/4a/221da6ca167db45693d8d26c7dc79ccfc978a440251bf6721c9aaf251ac0/respx-0.23.1-py2.py3-none-any.whl", hash = "sha256:b18004b029935384bccfa6d7d9d74b4ec9af73a081cc28600fffc0447f4b8c1a", size = 25557, upload-time = "2026-04-08T14:37:14.613Z" },
 ]
 
 [[package]]

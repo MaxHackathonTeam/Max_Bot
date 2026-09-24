@@ -1,7 +1,7 @@
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from app.api import health
 from app.core.config import Settings
@@ -94,8 +94,10 @@ async def test_ready_reports_failed_dependencies(
 
 def test_prod_with_dev_auth_refuses_to_start() -> None:
     with pytest.raises(ValidationError, match="DEV_AUTH"):
-        Settings(env="prod", dev_auth=True)
-    Settings(env="prod", dev_auth=False)
+        Settings(env="prod", dev_auth=True, jwt_secret=SecretStr("x" * 40))
+    Settings(env="prod", dev_auth=False, jwt_secret=SecretStr("x" * 40))
+    with pytest.raises(ValidationError, match="JWT_SECRET"):
+        Settings(_env_file=None, env="prod", dev_auth=False)
     Settings(env="local", dev_auth=True)
 
 

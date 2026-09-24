@@ -16,7 +16,8 @@ services:
   migrate:
     environment:
       ENV: prod
-      DATABASE_URL: ${DATABASE_URL:?Задай DATABASE_URL в .env}
+      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL:?Задай MIGRATE_DATABASE_URL в .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Задай APP_DB_PASSWORD в .env}
 
   worker:
     environment:

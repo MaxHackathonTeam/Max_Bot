@@ -9,8 +9,11 @@ x-backend: &backend
     - path: .env
       required: false
   environment:
-    DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://afisha:afisha@db:5432/afisha}
+    # Приложение — под ролью afisha_app (без DDL, audit_log только INSERT).
+    DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://afisha_app:afisha_app@db:5432/afisha}
     REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    # Вход вне MAX с фейковой initData (только локально; в compose.prod.yaml — "0").
+    DEV_AUTH: ${DEV_AUTH:-0}
   restart: unless-stopped
 
 services:
@@ -43,7 +46,12 @@ services:
 
   migrate:
     <<: *backend
-    command: ["alembic", "upgrade", "head"]
+    # Миграции — под владельцем БД; затем роли приложения включается вход.
+    command: ["sh", "-c", "alembic upgrade head && python -m app.db.roles"]
+    environment:
+      MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL:-postgresql+asyncpg://afisha:afisha@db:5432/afisha}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-afisha_app}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     restart: "no"
     depends_on:
       db:
@@ -78,7 +86,7 @@ services:
     <<: *backend
     command: ["python", "-m", "app.bot.poller"]
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://afisha:afisha@db:5432/afisha}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://afisha_app:afisha_app@db:5432/afisha}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       BOT_MODE: polling
     healthcheck:

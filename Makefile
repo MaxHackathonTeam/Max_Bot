@@ -13,8 +13,13 @@ down:
 logs:
 	$(COMPOSE) logs -f --tail=100
 
+# Тесты с БД: нужен Postgres+PostGIS, например
+#   docker run -d --name afisha-testdb -p 55432:5432 -e POSTGRES_USER=afisha \
+#     -e POSTGRES_PASSWORD=afisha postgis/postgis:16-3.4
+TEST_DATABASE_URL ?= postgresql+asyncpg://afisha:afisha@localhost:55432/afisha
+
 test:  ## Тесты бэкенда и фронтенда
-	$(BACKEND) uv run pytest
+	$(BACKEND) TEST_DATABASE_URL=$(TEST_DATABASE_URL) uv run pytest
 	cd frontend && npm test
 
 lint:  ## ruff + mypy + eslint + tsc
