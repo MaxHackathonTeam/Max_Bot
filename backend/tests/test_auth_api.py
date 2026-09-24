@@ -133,13 +133,13 @@ async def test_patch_me_and_consents(
 
     r = await db_client.patch(
         "/api/v1/me",
-        json={"radius_km": 30, "interests": ["music", "kids", "music"], "birth_year": 1990},
+        json={"radius_km": 30, "interests": ["concert", "kids", "concert"], "birth_year": 1990},
         headers=headers,
     )
     assert r.status_code == 200, r.text
     me = r.json()
     assert me["radius_km"] == 30
-    assert me["interests"] == ["music", "kids"]
+    assert me["interests"] == ["concert", "kids"]
     assert me["birth_year"] == 1990
 
     r = await db_client.patch("/api/v1/me", json={"radius_km": 7}, headers=headers)

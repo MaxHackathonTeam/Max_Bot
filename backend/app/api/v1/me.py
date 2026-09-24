@@ -1,9 +1,13 @@
 """Профиль текущего пользователя и согласия (FR-ONB)."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Response
 
 from app.api.deps import AuthDep, SessionDep, SettingsDep
+from app.schemas.events import SavedItem
 from app.schemas.users import ConsentsIn, MeOut, MeUpdate
+from app.services import saved as saved_service
 from app.services import users as users_service
 
 router = APIRouter(prefix="/me", tags=["me"])
@@ -34,3 +38,10 @@ async def accept_consents(
 ) -> MeOut:
     await users_service.accept_consents(session, auth.user, body.docs)
     return await users_service.to_me_out(session, auth.user, settings, auth.review_role)
+
+
+@router.get("/saved", response_model=list[SavedItem], summary="Мои «Пойду»")
+async def my_saved(
+    auth: AuthDep, session: SessionDep, when: Literal["upcoming", "past"] = "upcoming"
+) -> list[SavedItem]:
+    return await saved_service.list_saved(session, auth.user, when)

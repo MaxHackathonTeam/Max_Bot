@@ -17,6 +17,7 @@ dependencies = [
     "structlog>=24.1",
     "geoalchemy2>=0.15",
     "pyjwt>=2.9",
+    "timezonefinder>=6.5",
 ]
 
 [dependency-groups]

@@ -2,7 +2,7 @@ COMPOSE ?= docker compose
 PROD = $(COMPOSE) -f compose.yaml -f compose.prod.yaml
 BACKEND = cd backend &&
 
-.PHONY: up down logs test lint fmt migrate seed openapi eval deploy build-time
+.PHONY: up down logs test lint fmt migrate seed seed-gen openapi eval deploy build-time
 
 up:  ## Собрать и поднять всё локально
 	$(COMPOSE) up --build
@@ -32,8 +32,11 @@ fmt:
 migrate:  ## alembic upgrade head в контейнере
 	$(COMPOSE) run --rm migrate
 
-seed:  ## Загрузка демо-данных (этап 2)
-	@echo "seed: демо-данные появятся на этапе 2" && exit 1
+seed:  ## Загрузка/обновление демо-данных из data/seed (сеансы сдвигаются к сегодня)
+	$(COMPOSE) run --rm -e SEED_DEMO=1 migrate python -m app.seed
+
+seed-gen:  ## Пересобрать data/seed/events.json из шаблонов
+	$(BACKEND) uv run python scripts/gen_demo_events.py
 
 openapi:  ## Экспорт OpenAPI в openapi.yaml (этап 6 — полноценный)
 	@echo "openapi: экспорт в openapi.yaml будет добавлен вместе с эндпоинтами (этапы 1–6)" && exit 1

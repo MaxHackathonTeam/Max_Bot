@@ -4,7 +4,11 @@ import { useEffect, useRef } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { useBackButton } from '../bridge/useBackButton'
 import { getWebApp } from '../bridge/webApp'
+import { EventPage } from '../pages/EventPage'
 import { HomePage } from '../pages/HomePage'
+import { LegalPage } from '../pages/LegalPage'
+import { SavedPage } from '../pages/SavedPage'
+import { SettingsPage } from '../pages/SettingsPage'
 import { StubPage } from '../pages/StubPage'
 import { AuthGate } from './auth'
 import { startParamToPath } from './deeplink'
@@ -37,18 +41,24 @@ function DeeplinkRedirect() {
   return null
 }
 
-function AppRoutes() {
+/** Системная «Назад» — на всех экранах, включая /legal вне AuthGate. */
+function BackButton() {
   useBackButton()
+  return null
+}
+
+function AppRoutes() {
   return (
     <>
       <DeeplinkRedirect />
       <Routes>
         <Route path="/" element={<HomePage />} />
-        <Route path="/event/:id" element={<StubPage title="Событие" />} />
+        <Route path="/event/:id" element={<EventPage />} />
+        <Route path="/saved" element={<SavedPage />} />
         <Route path="/org/:id" element={<StubPage title="Организатор" />} />
         <Route path="/draft/:id" element={<StubPage title="Черновик события" />} />
         <Route path="/invite/:token" element={<StubPage title="Приглашение в команду" />} />
-        <Route path="/settings" element={<StubPage title="Настройки" />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
@@ -64,9 +74,19 @@ export function App() {
     <MaxUI platform={platform()} colorScheme={colorScheme()}>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
-          <AuthGate>
-            <AppRoutes />
-          </AuthGate>
+          <BackButton />
+          <Routes>
+            {/* Документы доступны без входа: ссылки на них есть в сообщении бота. */}
+            <Route path="/legal/:doc" element={<LegalPage />} />
+            <Route
+              path="*"
+              element={
+                <AuthGate>
+                  <AppRoutes />
+                </AuthGate>
+              }
+            />
+          </Routes>
         </BrowserRouter>
       </QueryClientProvider>
     </MaxUI>

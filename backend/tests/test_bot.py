@@ -1,20 +1,31 @@
 """Сценарии бота (§12) на настоящей БД; API MAX подменён respx."""
 
 import json
+import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import httpx
 import pytest
 import respx
 from fastapi import FastAPI
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import keyboards, texts
 from app.bot.dispatcher import BotContext, handle_update, parse_start_payload
+from app.bot.fsm import MemoryStateStore
 from app.core.config import Settings
 from app.integrations.max import MaxClient
+from app.models.enums import TrustTier
+from app.models.events import EventSession
+from app.models.geo import Locality
+from app.models.system import AuditLog
+from app.models.users import User
 from app.services import users as users_service
+from tests.factories import make_event, make_locality, make_org, make_venue, random_area
 from tests.helpers import random_max_id
 
 BASE = "https://max.test"
@@ -23,7 +34,9 @@ BASE = "https://max.test"
 @pytest.fixture
 def bot(db_app: FastAPI, db_settings: Settings) -> BotContext:
     client = MaxClient("tkn", BASE, retries=0, backoff_s=0)
-    return BotContext(settings=db_settings, db=db_app.state.db, max=client)
+    return BotContext(
+        settings=db_settings, db=db_app.state.db, max=client, states=MemoryStateStore()
+    )
 
 
 @pytest.fixture
@@ -66,16 +79,28 @@ def _callback(user_id: int, payload: str) -> dict[str, Any]:
     }
 
 
-def _text(user_id: int, text: str, chat_type: str = "dialog") -> dict[str, Any]:
+def _text(
+    user_id: int,
+    text: str | None,
+    chat_type: str = "dialog",
+    attachments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {"mid": "m1", "text": text}
+    if attachments:
+        body["attachments"] = attachments
     return {
         "update_type": "message_created",
         "timestamp": 3,
         "message": {
             "sender": {"user_id": user_id, "first_name": "Маша"},
             "recipient": {"chat_id": 42, "chat_type": chat_type},
-            "body": {"mid": "m1", "text": text},
+            "body": body,
         },
     }
+
+
+def _answers(max_api: respx.MockRouter) -> list[dict[str, Any]]:
+    return [json.loads(c.request.content) for c in max_api["answer"].calls]
 
 
 @pytest.mark.parametrize(
@@ -138,22 +163,26 @@ async def test_consent_callback_saves_and_answers(
     answer = max_api["answer"].calls.last.request
     assert json.loads(answer.content) == {"notification": texts.CONSENT_ACCEPTED_TOAST}
     assert answer.url.params["callback_id"] == "cb-1"
-    assert _sent(max_api)[-1]["text"] == texts.MENU
+    # Места ещё нет — онбординг спрашивает населённый пункт.
+    ask = _sent(max_api)[-1]
+    assert ask["text"] == texts.ASK_LOCALITY
+    assert _buttons(ask)[0]["type"] == "request_geo_location"
 
     user = await users_service.get_by_max_id(db_session, user_id)
     assert user is not None
     assert await users_service.has_required_consents(db_session, user)
 
-    # После согласия /start сразу показывает меню без повторного запроса.
+    # После согласия /start сразу показывает меню без повторного запроса согласия.
     before = len(_sent(max_api))
     await handle_update(bot, _text(user_id, "/start"))
-    (menu,) = _sent(max_api)[before:]
+    menu, ask_again = _sent(max_api)[before:]
     assert menu["text"].startswith("Привет, Маша!")
     assert _buttons(menu)[0]["type"] == "open_app"
+    assert ask_again["text"] == texts.ASK_LOCALITY
 
 
 async def test_soon_callback_toast(bot: BotContext, max_api: respx.MockRouter) -> None:
-    await handle_update(bot, _callback(random_max_id(), keyboards.CB_TODAY))
+    await handle_update(bot, _callback(random_max_id(), keyboards.CB_ORG))
     answer = json.loads(max_api["answer"].calls.last.request.content)
     assert answer == {"notification": texts.SOON_TOAST}
     assert _sent(max_api) == []
@@ -186,3 +215,266 @@ async def test_error_handler_reports_to_user(bot: BotContext, max_api: respx.Moc
     assert _buttons(error)[0]["payload"] == keyboards.CB_MENU
     # callback уже был отвечен до ошибки — повторно не отвечаем.
     assert max_api["answer"].call_count == 1
+
+
+# --- Онбординг, подборки, «Пойду», настройки (этап 2) ---------------------------------
+
+
+def _unique(prefix: str) -> str:
+    return f"{prefix}{uuid.uuid4().hex[:8]}"
+
+
+async def _user(session: AsyncSession, user_id: int) -> User:
+    # Бот пишет в БД своей сессией — перечитываем пользователя, не трогая остальные объекты.
+    user = await session.scalar(
+        select(User).where(User.max_user_id == user_id).execution_options(populate_existing=True)
+    )
+    assert user is not None
+    return user
+
+
+async def _ready_user(bot: BotContext, session: AsyncSession, locality: Locality | None) -> int:
+    """Пользователь с согласием и (если передан) населённым пунктом."""
+    user_id = random_max_id()
+    await handle_update(bot, _callback(user_id, keyboards.CB_CONSENT_ACCEPT))
+    if locality is not None:
+        await users_service.set_location(session, await _user(session, user_id), locality.id)
+    return user_id
+
+
+async def test_onboarding_by_text_and_interests(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    lat, lon = random_area()
+    name = _unique("Берёзовка")
+    locality = await make_locality(db_session, name, lat, lon)
+    await db_session.commit()
+    await db_session.refresh(locality)
+    user_id = await _ready_user(bot, db_session, None)
+
+    await handle_update(bot, _text(user_id, name))
+    choose = _sent(max_api)[-1]
+    assert choose["text"] == texts.LOCALITY_CHOOSE
+    assert {
+        "type": "callback",
+        "text": f"{name}, Тестовая область",
+        "payload": f"loc:{locality.id}",
+    } in _buttons(choose)
+
+    before = len(_sent(max_api))
+    await handle_update(bot, _callback(user_id, f"loc:{locality.id}"))
+    saved, interests = _sent(max_api)[before:]
+    assert saved["text"] == texts.LOCALITY_SAVED.format(name=name)
+    assert interests["text"] == texts.ASK_INTERESTS
+
+    await handle_update(bot, _callback(user_id, "int:concert"))
+    edited = _answers(max_api)[-1]["message"]
+    labels = [b["text"] for b in _buttons(edited)]
+    assert "✅ Концерты" in labels
+
+    await handle_update(bot, _callback(user_id, "int:done"))
+    assert _sent(max_api)[-1]["text"] == texts.INTERESTS_SAVED
+
+    user = await _user(db_session, user_id)
+    assert user.locality_id == locality.id
+    assert user.interests == ["concert"]
+    # Состояние сброшено: обычный текст — снова «пока понимаю только команды».
+    await handle_update(bot, _text(user_id, name))
+    assert _sent(max_api)[-1]["text"] == texts.UNKNOWN_TEXT
+
+
+async def test_onboarding_by_geolocation(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    lat, lon = random_area()
+    locality = await make_locality(db_session, _unique("Сосновка"), lat, lon)
+    await db_session.commit()
+    await db_session.refresh(locality)
+    user_id = await _ready_user(bot, db_session, None)
+
+    geo = [{"type": "location", "latitude": lat + 0.01, "longitude": lon}]
+    await handle_update(bot, _text(user_id, None, attachments=geo))
+    assert _sent(max_api)[-1]["text"] == texts.ASK_INTERESTS
+
+    user = await _user(db_session, user_id)
+    assert user.locality_id == locality.id
+    assert user.home_point is not None
+    diff = await db_session.scalar(
+        select(AuditLog.diff)
+        .where(AuditLog.entity_id == user.id, AuditLog.action == "user.update_profile")
+        .order_by(AuditLog.id.desc())
+        .limit(1)
+    )
+    # Координаты в журнал не пишем.
+    assert diff is not None
+    assert diff["locality_id"] == [None, locality.id]
+    assert f"{lat:.3f}"[:6] not in json.dumps(diff)
+
+
+async def test_unknown_locality_text(bot: BotContext, max_api: respx.MockRouter) -> None:
+    user_id = random_max_id()
+    await handle_update(bot, _callback(user_id, keyboards.CB_CONSENT_ACCEPT))
+    await handle_update(bot, _text(user_id, "Несуществующеград"))
+    reply = _sent(max_api)[-1]
+    assert reply["text"].startswith("Не нашёл «Несуществующеград»")
+    assert _buttons(reply)[0]["type"] == "request_geo_location"
+
+
+async def test_pushkin_feed_pages_and_save(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    lat, lon = random_area()
+    locality = await make_locality(db_session, _unique("Липовка"), lat, lon)
+    venue = await make_venue(db_session, locality, lat, lon, name="Клуб")
+    org = await make_org(db_session)
+    for i in range(7):
+        await make_event(
+            db_session,
+            locality,
+            title=f"Пушкинское {i}",
+            venue=venue,
+            org=org,
+            starts=[datetime.now(UTC) + timedelta(days=1, hours=i)],
+            pushkin_card=True,
+            price_type="paid",
+            price_min=Decimal(300),
+            price_max=Decimal(300),
+        )
+    await make_event(
+        db_session,
+        locality,
+        title="Соседское",
+        trust_tier=TrustTier.community,
+        pushkin_card=True,
+    )
+    await db_session.commit()
+    await db_session.refresh(locality)
+    user_id = await _ready_user(bot, db_session, locality)
+
+    await handle_update(bot, _callback(user_id, keyboards.CB_PUSHKIN))
+    first = _sent(max_api)[-1]
+    assert "1. " in first["text"] and "Пушкинское 0" in first["text"]
+    assert "300 ₽ · 💳" in first["text"]
+    # Подборка бота — «Официальные»: событие сообщества не подмешивается.
+    assert "Соседское" not in first["text"]
+    buttons = _buttons(first)
+    assert buttons[0] == {
+        "type": "open_app",
+        "text": "1. Подробнее",
+        "web_app": "afisha_test_bot",
+        "payload": buttons[0]["payload"],
+    }
+    assert buttons[0]["payload"].startswith("ev_")
+    save = next(b for b in buttons if b["payload"].startswith("save:"))
+    more = next(b for b in buttons if b["text"] == texts.FEED_MORE_BUTTON)
+    assert more["payload"].startswith("feed:pushkin:30:5:")
+    assert all(len(b.get("payload", "")) <= 1024 for b in buttons)
+
+    await handle_update(bot, _callback(user_id, more["payload"]))
+    second = _sent(max_api)[-1]
+    assert "6. " in second["text"] and "7. " in second["text"]
+    assert not any(b["text"] == texts.FEED_MORE_BUTTON for b in _buttons(second))
+
+    await handle_update(bot, _callback(user_id, save["payload"]))
+    assert _answers(max_api)[-1] == {"notification": texts.SAVED_TOAST}
+    # Повторное нажатие идемпотентно.
+    await handle_update(bot, _callback(user_id, save["payload"]))
+    assert _answers(max_api)[-1] == {"notification": texts.SAVED_TOAST}
+
+    await handle_update(bot, _text(user_id, "/saved"))
+    saved = _sent(max_api)[-1]
+    assert saved["text"].startswith(texts.SAVED_HEADER)
+    assert "Пушкинское 0" in saved["text"]
+    unsave = next(b for b in _buttons(saved) if b["payload"].startswith("unsave:"))
+
+    await handle_update(bot, _callback(user_id, unsave["payload"]))
+    answer = _answers(max_api)[-1]
+    assert answer["notification"] == texts.UNSAVED_TOAST
+    assert answer["message"]["text"] == texts.SAVED_EMPTY
+
+
+async def test_feed_empty_offers_wider_radius(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    lat, lon = random_area()
+    locality = await make_locality(db_session, _unique("Пустошь"), lat, lon)
+    await db_session.commit()
+    await db_session.refresh(locality)
+    user_id = await _ready_user(bot, db_session, locality)
+
+    await handle_update(bot, _text(user_id, "/today"))
+    empty = _sent(max_api)[-1]
+    assert "ничего не нашёл" in empty["text"]
+    assert _buttons(empty)[0]["payload"] == "feed:today:50:0"
+
+
+async def test_feed_without_locality_asks_place(bot: BotContext, max_api: respx.MockRouter) -> None:
+    user_id = random_max_id()
+    await handle_update(bot, _text(user_id, "/weekend"))
+    reply = _sent(max_api)[-1]
+    assert reply["text"].startswith(texts.NEED_LOCALITY)
+    assert _buttons(reply)[0]["type"] == "request_geo_location"
+
+
+async def test_broken_feed_payload_is_ignored(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    lat, lon = random_area()
+    locality = await make_locality(db_session, _unique("Ольховка"), lat, lon)
+    await db_session.commit()
+    await db_session.refresh(locality)
+    user_id = await _ready_user(bot, db_session, locality)
+    before = len(_sent(max_api))
+    await handle_update(bot, _callback(user_id, "feed:today:31:0"))
+    assert len(_sent(max_api)) == before
+    await handle_update(bot, _callback(user_id, "feed:today:30:0:bad-cursor"))
+    assert _sent(max_api)[-1]["text"] == texts.FEED_EXPIRED_TOAST
+
+
+async def test_save_without_consent_asks_consent(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    lat, lon = random_area()
+    locality = await make_locality(db_session, _unique("Ивановка"), lat, lon)
+    event = await make_event(db_session, locality)
+    session_id = await db_session.scalar(
+        select(EventSession.id).where(EventSession.event_id == event.id)
+    )
+    await db_session.commit()
+
+    await handle_update(bot, _callback(random_max_id(), f"save:{event.id}:{session_id}"))
+    assert _answers(max_api)[-1]["notification"].startswith("Чтобы сохранять события")
+    assert _buttons(_sent(max_api)[-1])[0]["payload"] == keyboards.CB_CONSENT_ACCEPT
+
+
+async def test_settings_radius_toggles_and_delete(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    lat, lon = random_area()
+    name = _unique("Дубки")
+    locality = await make_locality(db_session, name, lat, lon)
+    await db_session.commit()
+    await db_session.refresh(locality)
+    user_id = await _ready_user(bot, db_session, locality)
+
+    await handle_update(bot, _text(user_id, "/settings"))
+    view = _sent(max_api)[-1]
+    assert f"Место: {name}" in view["text"]
+    assert "Радиус: 30 км" in view["text"]
+
+    await handle_update(bot, _callback(user_id, "rad:5"))
+    edited = _answers(max_api)[-1]["message"]
+    assert "Радиус: 5 км" in edited["text"]
+    assert "• 5 км •" in [b["text"] for b in _buttons(edited)]
+    await handle_update(bot, _callback(user_id, keyboards.CB_SET_REMINDERS))
+    assert "Напоминания: выкл" in _answers(max_api)[-1]["message"]["text"]
+    user = await _user(db_session, user_id)
+    assert (user.radius_km, user.notify_reminders) == (5, False)
+
+    await handle_update(bot, _text(user_id, "/delete_me"))
+    assert _sent(max_api)[-1]["text"] == texts.DELETE_CONFIRM
+    await handle_update(bot, _callback(user_id, keyboards.CB_DELETE_YES))
+    assert _sent(max_api)[-1]["text"] == texts.DELETE_DONE
+    deleted = await db_session.get(User, user.id, populate_existing=True)
+    assert deleted is not None
+    assert deleted.deleted_at is not None and deleted.max_user_id is None

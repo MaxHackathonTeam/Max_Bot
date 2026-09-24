@@ -6,12 +6,15 @@
 import asyncio
 
 import structlog
+from redis.asyncio import Redis
 
 from app.bot.dispatcher import BotContext, handle_update
+from app.bot.fsm import RedisStateStore
 from app.bot.subscriptions import drop_webhooks
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import make_engine, make_sessionmaker
+from app.integrations.geo_factory import build_geo_provider
 from app.integrations.max import client_from_settings
 
 log = structlog.get_logger(__name__)
@@ -46,13 +49,21 @@ async def main() -> None:
         await asyncio.Event().wait()
         return
     engine = make_engine(settings.database_url)
-    ctx = BotContext(settings=settings, db=make_sessionmaker(engine), max=client)
+    redis = Redis.from_url(settings.redis_url)
+    ctx = BotContext(
+        settings=settings,
+        db=make_sessionmaker(engine),
+        max=client,
+        states=RedisStateStore(redis),
+        geo=build_geo_provider(settings, redis),
+    )
     try:
         await drop_webhooks(client)
         log.info("bot_poller_started")
         await poll(ctx, asyncio.Event())
     finally:
         await client.aclose()
+        await redis.aclose()
         await engine.dispose()
 
 

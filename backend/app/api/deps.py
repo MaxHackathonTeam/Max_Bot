@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.security import decode_access_token
+from app.integrations.geo import GeoProvider
 from app.models.users import User
 
 _bearer = HTTPBearer(auto_error=False, description="JWT из POST /api/v1/auth/max")
@@ -26,8 +27,14 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 
 
+def get_geo(request: Request) -> GeoProvider | None:
+    geo: GeoProvider | None = getattr(request.app.state, "geo", None)
+    return geo
+
+
 SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+GeoDep = Annotated[GeoProvider | None, Depends(get_geo)]
 
 
 @dataclass(frozen=True)
@@ -61,3 +68,20 @@ async def current_auth(
 
 
 AuthDep = Annotated[Auth, Depends(current_auth)]
+
+
+async def optional_auth(
+    session: SessionDep,
+    settings: SettingsDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> Auth | None:
+    """Для публичных ручек: пользователь, если токен есть и валиден, иначе None."""
+    if credentials is None:
+        return None
+    try:
+        return await current_auth(session, settings, credentials)
+    except HTTPException:
+        return None
+
+
+OptionalAuthDep = Annotated[Auth | None, Depends(optional_auth)]

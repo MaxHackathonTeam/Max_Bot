@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from app.models.enums import ConsentDoc
+from app.services.categories import is_known
 
 InterestSlug = Annotated[str, StringConstraints(pattern=r"^[a-z0-9_]{1,32}$")]
 
@@ -47,6 +48,16 @@ class MeUpdate(BaseModel):
     birth_year: int | None = Field(default=None, ge=1900, le=2100)
     notify_digest: bool | None = None
     notify_reminders: bool | None = None
+
+    @field_validator("interests")
+    @classmethod
+    def _known_interests(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        unknown = [slug for slug in value if not is_known(slug)]
+        if unknown:
+            raise ValueError(f"Неизвестные категории: {', '.join(unknown)}")
+        return list(dict.fromkeys(value))
 
 
 class ConsentsIn(BaseModel):

@@ -11,12 +11,23 @@ export interface WebAppBackButton {
   offClick(callback: () => void): void
 }
 
+// Сигнатуры openLink, shareMaxContent и HapticFeedback взяты из §9/§4.3 техдока;
+// по документации dev.max.ru/docs/webapps/bridge НЕ сверены (страница была недоступна) —
+// поэтому каждый вызов защищён проверкой наличия метода и fallback (см. actions.ts).
+export interface WebAppHaptic {
+  impactOccurred?(style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft'): void
+  notificationOccurred?(type: 'error' | 'success' | 'warning'): void
+}
+
 export interface WebApp {
   initData?: string
   initDataUnsafe?: { start_param?: string; user?: { id: number; first_name?: string } }
   platform?: string
   ready?(): void
   BackButton?: WebAppBackButton
+  openLink?(url: string): void
+  shareMaxContent?(params: { text?: string; link?: string }): unknown
+  HapticFeedback?: WebAppHaptic
 }
 
 declare global {

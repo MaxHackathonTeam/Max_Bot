@@ -98,6 +98,8 @@ def db_settings(app_database_url: str) -> Settings:
 @pytest.fixture
 async def db_app(db_settings: Settings) -> AsyncIterator[FastAPI]:
     app = create_app(db_settings)
+    # Никаких сетевых геокодеров в тестах; нужные тесты подставляют фейковый.
+    app.state.geo = None
     yield app
     await app.state.db.kw["bind"].dispose()
 

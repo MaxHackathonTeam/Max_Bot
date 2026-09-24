@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
+from redis.asyncio import Redis
 
 from app.api.bot_webhook import router as bot_webhook_router
 from app.api.health import router as health_router
@@ -18,6 +19,7 @@ from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging
 from app.core.request_id import RequestIdMiddleware
 from app.db.session import make_engine, make_sessionmaker
+from app.integrations.geo_factory import build_geo_provider
 from app.integrations.max import client_from_settings
 
 log = structlog.get_logger(__name__)
@@ -44,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(settings.log_level)
     engine = make_engine(settings.database_url)
     update_sink = ArqUpdateSink(settings.redis_url)
+    redis = Redis.from_url(settings.redis_url)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -59,6 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             with contextlib.suppress(asyncio.CancelledError):
                 await subscribe_task
         await update_sink.close()
+        await redis.aclose()
         await engine.dispose()
         log.info("shutdown")
 
@@ -72,6 +76,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.db = make_sessionmaker(engine)
     app.state.update_sink = update_sink
+    app.state.redis = redis
+    app.state.geo = build_geo_provider(settings, redis)
     app.add_middleware(RequestIdMiddleware)
     register_error_handlers(app)
     app.include_router(health_router)

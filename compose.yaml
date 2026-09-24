@@ -46,9 +46,11 @@ services:
 
   migrate:
     <<: *backend
-    # Миграции — под владельцем БД; затем роли приложения включается вход.
-    command: ["sh", "-c", "alembic upgrade head && python -m app.db.roles"]
+    # Миграции — под владельцем БД; затем роли приложения включается вход;
+    # затем демо-набор (только при SEED_DEMO=1, повторный запуск идемпотентен).
+    command: ["sh", "-c", "alembic upgrade head && python -m app.db.roles && python -m app.seed"]
     environment:
+      SEED_DEMO: ${SEED_DEMO:-1}
       MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL:-postgresql+asyncpg://afisha:afisha@db:5432/afisha}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:-afisha_app}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
