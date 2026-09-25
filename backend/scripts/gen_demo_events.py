@@ -1,0 +1,798 @@
+"""Генератор демо-событий: `uv run python scripts/gen_demo_events.py` → data/seed/events.json.
+
+События вымышленные и в ленте помечены «Демо-данные»; площадки — из venues.json.
+Даты хранятся относительно дня загрузки (`day`), поэтому набор не устаревает:
+повторный `make seed` сдвигает сеансы к текущей дате.
+Генерация детерминирована (Random(42)) — повторный запуск даёт тот же файл.
+"""
+
+import json
+import random
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+SEED_DIR = Path(__file__).resolve().parents[2] / "data" / "seed"
+
+
+@dataclass(frozen=True)
+class Template:
+    category: str
+    title: str
+    short: str
+    description: str
+    kinds: tuple[str, ...]  # org_kind площадки; "open" — площадка без организации
+    price: str  # free | cheap | paid | donation
+    age: int
+    minutes: int
+    times: tuple[str, ...]
+    indoor: str = "indoor"
+    tags: tuple[str, ...] = ()
+    sessions: int = 1
+    registration: bool = False
+    only_venues: tuple[str, ...] = ()  # шаблон про конкретное место
+    region: str | None = None  # шаблон про конкретный регион
+
+
+OFFICIAL = [
+    # Концерты
+    Template(
+        "concert",
+        "Концерт народного хора «Сударушка»",
+        "Русские народные песни и частушки",
+        "Народный хор исполнит старинные новгородские песни, романсы и частушки. "
+        "В программе — песни о родном крае и хороводы со зрителями.",
+        ("dk",),
+        "cheap",
+        0,
+        90,
+        ("17:00", "18:00"),
+        tags=("народная музыка",),
+        region="53",
+    ),
+    Template(
+        "concert",
+        "Вечер баяна и гармони",
+        "Играют лауреаты областного конкурса",
+        "Баянисты и гармонисты района исполнят народные мелодии, вальсы и песни военных лет. "
+        "Можно подпевать!",
+        ("dk",),
+        "free",
+        0,
+        90,
+        ("18:00",),
+        tags=("гармонь",),
+    ),
+    Template(
+        "concert",
+        "Концерт камерной музыки",
+        "Струнный квартет: Чайковский и Бородин",
+        "Струнный квартет исполнит произведения русских композиторов. "
+        "Перед концертом — короткий рассказ о каждом произведении.",
+        ("museum", "library"),
+        "paid",
+        6,
+        80,
+        ("19:00",),
+        tags=("классика",),
+    ),
+    Template(
+        "concert",
+        "Рок-вечер местных групп",
+        "Три молодые группы района на одной сцене",
+        "Выступят молодые группы района: собственные песни и каверы.",
+        ("dk",),
+        "cheap",
+        12,
+        150,
+        ("19:00",),
+        tags=("рок", "молодёжь"),
+    ),
+    Template(
+        "concert",
+        "Концерт духового оркестра",
+        "Марши, вальсы и песни под открытым небом",
+        "Муниципальный духовой оркестр играет марши, вальсы и популярные мелодии. "
+        "Берите с собой плед или складной стул.",
+        ("park", "dk"),
+        "free",
+        0,
+        70,
+        ("15:00", "16:00"),
+        indoor="outdoor",
+    ),
+    # Театр
+    Template(
+        "theatre",
+        "Спектакль «Женитьба» по Н. В. Гоголю",
+        "Комедия в двух действиях",
+        "Классическая комедия о нерешительном женихе и хлопотах свахи. "
+        "Спектакль идёт с одним антрактом.",
+        ("theatre",),
+        "paid",
+        12,
+        150,
+        ("18:00", "19:00"),
+        sessions=2,
+        tags=("классика", "комедия"),
+    ),
+    Template(
+        "theatre",
+        "Спектакль «Бедные люди»",
+        "Постановка по роману Ф. М. Достоевского",
+        "Камерная постановка первого романа Достоевского — история переписки "
+        "Макара Девушкина и Вареньки Доброселовой.",
+        ("theatre", "museum"),
+        "paid",
+        16,
+        120,
+        ("19:00",),
+        tags=("Достоевский",),
+        only_venues=("nov_drama", "sr_dostoevsky", "bor_theatre"),
+    ),
+    Template(
+        "theatre",
+        "Сказка «Морозко» для детей",
+        "Спектакль для самых маленьких",
+        "Добрая новогодняя сказка с песнями и играми со зрителями. После спектакля — "
+        "фотосессия с героями.",
+        ("theatre", "dk"),
+        "cheap",
+        0,
+        60,
+        ("11:00", "12:00"),
+        tags=("детям",),
+        sessions=2,
+    ),
+    Template(
+        "theatre",
+        "Любительский театр: «Лес» А. Н. Островского",
+        "Премьера народного театра",
+        "Народный театр Дома культуры показывает премьеру по пьесе Островского. "
+        "Актёры — жители района, режиссёр — руководитель театральной студии.",
+        ("dk",),
+        "cheap",
+        12,
+        130,
+        ("18:00",),
+    ),
+    # Кино
+    Template(
+        "cinema",
+        "Кинопоказ: «Летят журавли»",
+        "Классика советского кино на большом экране",
+        "Показ фильма Михаила Калатозова и обсуждение после сеанса.",
+        ("dk", "library"),
+        "free",
+        12,
+        120,
+        ("18:00",),
+        tags=("кино", "классика"),
+    ),
+    Template(
+        "cinema",
+        "Семейный кинопоказ мультфильмов",
+        "Сборник российских мультфильмов",
+        "Показываем сборник современных российских мультфильмов для всей семьи.",
+        ("dk",),
+        "cheap",
+        0,
+        75,
+        ("12:00", "15:00"),
+        tags=("детям",),
+    ),
+    Template(
+        "cinema",
+        "Киноклуб: документальное кино о крае",
+        "Фильм о новгородских деревнях",
+        "Документальный фильм о жизни северных деревень и встреча с авторами.",
+        ("library", "museum"),
+        "free",
+        12,
+        100,
+        ("18:30",),
+        region="53",
+    ),
+    # Выставки
+    Template(
+        "exhibition",
+        "Выставка «Берестяные грамоты: письма из прошлого»",
+        "Как новгородцы писали друг другу 800 лет назад",
+        "Копии берестяных грамот, инструменты для письма и рассказ о находках археологов.",
+        ("museum",),
+        "paid",
+        6,
+        60,
+        ("10:00", "11:00", "14:00"),
+        sessions=5,
+        tags=("история",),
+        only_venues=("nov_kremlin", "shimsk_museum", "sr_dostoevsky"),
+    ),
+    Template(
+        "exhibition",
+        "Выставка местных художников «Родные просторы»",
+        "Пейзажи и портреты жителей района",
+        "Живопись и графика художников района: реки, леса, деревенские улицы и лица земляков.",
+        ("museum", "library", "dk"),
+        "free",
+        0,
+        60,
+        ("10:00", "12:00"),
+        sessions=4,
+        tags=("живопись",),
+    ),
+    Template(
+        "exhibition",
+        "Выставка «Колокольных дел мастера»",
+        "Валдайские колокольчики и их история",
+        "Колокольчики разных эпох, мастерские клейма и истории литейщиков.",
+        ("museum",),
+        "paid",
+        0,
+        60,
+        ("11:00", "15:00"),
+        sessions=4,
+        only_venues=("valday_bells",),
+    ),
+    Template(
+        "exhibition",
+        "Фотовыставка «Деревня, где я живу»",
+        "Фотографии жителей района",
+        "Итоги районного фотоконкурса: повседневная жизнь, праздники и природа.",
+        ("library", "dk"),
+        "free",
+        0,
+        45,
+        ("10:00", "14:00"),
+        sessions=3,
+    ),
+    # Мастер-классы
+    Template(
+        "masterclass",
+        "Мастер-класс по росписи пряников",
+        "Распишите свой пряник глазурью",
+        "Мастер покажет, как расписывать пряники глазурью. Пряник заберёте с собой.",
+        ("museum", "dk", "library"),
+        "cheap",
+        6,
+        90,
+        ("12:00", "14:00"),
+        registration=True,
+        tags=("семьёй",),
+    ),
+    Template(
+        "masterclass",
+        "Мастер-класс «Кукла-оберег»",
+        "Традиционная тряпичная кукла своими руками",
+        "Соберём традиционную тряпичную куклу без иголки и ниток. Материалы выдаём.",
+        ("museum", "library", "dk"),
+        "cheap",
+        6,
+        60,
+        ("12:00", "15:00"),
+        registration=True,
+    ),
+    Template(
+        "masterclass",
+        "Гончарный мастер-класс",
+        "Первый горшок на гончарном круге",
+        "Попробуйте поработать на гончарном круге. Изделие обожгут и отдадут через неделю.",
+        ("museum", "dk"),
+        "paid",
+        12,
+        90,
+        ("13:00", "16:00"),
+        registration=True,
+    ),
+    Template(
+        "masterclass",
+        "Мастер-класс по плетению из бересты",
+        "Сплетите солонку из бересты",
+        "Мастер расскажет о старинном ремесле и поможет сплести небольшую солонку.",
+        ("museum",),
+        "paid",
+        12,
+        120,
+        ("11:00",),
+        registration=True,
+    ),
+    # Лекции
+    Template(
+        "lecture",
+        "Лекция «Новгородская республика: вече и князья»",
+        "Как новгородцы выбирали власть",
+        "Историк расскажет о вечевом строе и его роли в истории Руси.",
+        ("museum", "library"),
+        "free",
+        12,
+        60,
+        ("18:00",),
+        tags=("история",),
+        region="53",
+    ),
+    Template(
+        "lecture",
+        "Лекция «Достоевский в Старой Руссе»",
+        "Город в романе «Братья Карамазовы»",
+        "Как Старая Русса стала Скотопригоньевском и что писатель делал на курорте.",
+        ("museum", "library"),
+        "free",
+        12,
+        60,
+        ("17:00",),
+        tags=("литература",),
+        only_venues=("sr_dostoevsky", "nov_library"),
+    ),
+    Template(
+        "lecture",
+        "Встреча с краеведом «Истории нашей улицы»",
+        "Старые фотографии и воспоминания старожилов",
+        "Краевед покажет старые фотографии и расскажет, как менялись улицы и дома.",
+        ("library", "museum", "dk"),
+        "free",
+        6,
+        60,
+        ("16:00", "17:00"),
+    ),
+    Template(
+        "lecture",
+        "Лекция «Как не попасться на уловки мошенников»",
+        "Практические советы для всех возрастов",
+        "Разберём типичные схемы телефонных и интернет-мошенников и как от них защититься.",
+        ("library",),
+        "free",
+        12,
+        60,
+        ("14:00",),
+    ),
+    # Фестивали
+    Template(
+        "festival",
+        "Праздник урожая",
+        "Ярмарка, концерт и народные игры",
+        "Ярмарка местных фермеров и мастеров, концерт самодеятельности, конкурс на самую "
+        "большую тыкву.",
+        ("dk", "park"),
+        "free",
+        0,
+        240,
+        ("12:00",),
+        indoor="outdoor",
+        tags=("ярмарка", "семьёй"),
+    ),
+    Template(
+        "festival",
+        "Фестиваль народных ремёсел",
+        "Мастера района показывают свои ремёсла",
+        "Кузнецы, гончары, вышивальщицы и резчики по дереву — смотрите и пробуйте сами.",
+        ("museum", "park"),
+        "free",
+        0,
+        300,
+        ("11:00",),
+        indoor="mixed",
+    ),
+    # Спорт
+    Template(
+        "sport",
+        "Районный турнир по мини-футболу",
+        "Команды сёл района",
+        "Сыграют команды сёл района. Приходите поболеть за своих!",
+        ("dk",),
+        "free",
+        0,
+        180,
+        ("11:00",),
+        indoor="outdoor",
+    ),
+    Template(
+        "sport",
+        "Скандинавская ходьба с инструктором",
+        "Лёгкая прогулка для всех возрастов",
+        "Инструктор покажет технику и проведёт прогулку на 3 км. Палки выдаём.",
+        ("park", "dk"),
+        "free",
+        0,
+        60,
+        ("10:00",),
+        indoor="outdoor",
+    ),
+    Template(
+        "sport",
+        "Шахматный турнир",
+        "Быстрые шахматы, все уровни",
+        "Турнир по быстрым шахматам по швейцарской системе. Приходите со своими часами, если есть.",
+        ("library", "dk"),
+        "free",
+        6,
+        180,
+        ("11:00",),
+        registration=True,
+    ),
+    # Экскурсии
+    Template(
+        "excursion",
+        "Экскурсия по кремлю",
+        "Главные памятники и легенды",
+        "Экскурсовод проведёт по кремлю, расскажет о соборах, стенах и башнях.",
+        ("museum",),
+        "paid",
+        6,
+        90,
+        ("11:00", "14:00"),
+        indoor="outdoor",
+        sessions=3,
+        only_venues=("nov_kremlin", "kzn_kremlin"),
+    ),
+    Template(
+        "excursion",
+        "Экскурсия «Деревянная Русь»",
+        "Избы, часовни и мельницы",
+        "Пройдём по деревне-музею: крестьянские избы, часовни и ветряные мельницы.",
+        ("museum",),
+        "paid",
+        6,
+        90,
+        ("12:00", "15:00"),
+        indoor="outdoor",
+        sessions=3,
+        only_venues=("nov_vitoslavlitsy",),
+    ),
+    Template(
+        "excursion",
+        "Пешеходная экскурсия по старому городу",
+        "Купеческие дома и храмы",
+        "Прогулка по историческому центру: купеческие особняки, храмы и старые торговые ряды.",
+        ("museum", "library"),
+        "cheap",
+        6,
+        90,
+        ("12:00",),
+        indoor="outdoor",
+    ),
+    # Игры
+    Template(
+        "games",
+        "Квиз «Знаешь ли ты свой край?»",
+        "Командная игра на знание истории района",
+        "Команды до 6 человек отвечают на вопросы о районе. Победителям — призы от музея.",
+        ("library", "museum", "dk"),
+        "free",
+        12,
+        120,
+        ("18:00",),
+        registration=True,
+    ),
+    Template(
+        "games",
+        "Вечер настольных игр",
+        "Играем в современные настольные игры",
+        "Десятки настольных игр для компаний и семей. Правила объяснят.",
+        ("library", "dk"),
+        "free",
+        6,
+        180,
+        ("17:00",),
+    ),
+    # Детям
+    Template(
+        "kids",
+        "Детская программа «Весёлые старты»",
+        "Эстафеты и конкурсы для детей",
+        "Спортивные эстафеты, конкурсы и призы для детей 5–10 лет.",
+        ("dk", "park"),
+        "free",
+        0,
+        60,
+        ("12:00",),
+        tags=("детям",),
+    ),
+    Template(
+        "kids",
+        "Кукольный театр «Теремок»",
+        "Спектакль для малышей",
+        "Кукольный спектакль по русской народной сказке для детей от 3 лет.",
+        ("dk", "library", "theatre"),
+        "cheap",
+        0,
+        45,
+        ("11:00",),
+        tags=("детям",),
+    ),
+    Template(
+        "kids",
+        "Громкие чтения для детей",
+        "Читаем сказки вместе",
+        "Библиотекарь читает сказки, а потом дети рисуют любимых героев.",
+        ("library",),
+        "free",
+        0,
+        45,
+        ("11:00",),
+        tags=("детям",),
+    ),
+    Template(
+        "kids",
+        "Музейное занятие «Как жили в старину»",
+        "Интерактивное занятие для школьников",
+        "Дети узнают, как устроена изба, примерят старинную одежду и попробуют ручные жернова.",
+        ("museum",),
+        "cheap",
+        6,
+        60,
+        ("11:00", "13:00"),
+        tags=("детям",),
+    ),
+    # Другое
+    Template(
+        "other",
+        "Литературная гостиная",
+        "Стихи местных поэтов",
+        "Поэты района читают свои стихи; приходите со своими — будет открытый микрофон.",
+        ("library", "dk"),
+        "free",
+        12,
+        90,
+        ("17:00",),
+    ),
+]
+
+COMMUNITY = [
+    Template(
+        "games",
+        "Турнир по настольному теннису",
+        "Любительский турнир, приходите со своей ракеткой",
+        "Играем на двух столах, сетка на выбывание. Организует клуб любителей настольного тенниса.",
+        ("dk",),
+        "free",
+        6,
+        180,
+        ("12:00",),
+    ),
+    Template(
+        "sport",
+        "Утренняя пробежка «Бегом по набережной»",
+        "5 км в спокойном темпе",
+        "Собираемся у входа и бежим вместе в спокойном темпе. Организуют местные бегуны.",
+        ("open", "none"),
+        "free",
+        12,
+        60,
+        ("08:00", "09:00"),
+        indoor="outdoor",
+    ),
+    Template(
+        "festival",
+        "Соседский праздник двора",
+        "Чаепитие, игры и музыка",
+        "Жители соседних домов устраивают праздник: самовар, пироги, игры для детей и музыка.",
+        ("open", "none"),
+        "donation",
+        0,
+        180,
+        ("14:00",),
+        indoor="outdoor",
+    ),
+    Template(
+        "other",
+        "Субботник на берегу реки",
+        "Уберём берег вместе",
+        "Мешки и перчатки выдадим. После уборки — чай у костра.",
+        ("open", "none"),
+        "free",
+        6,
+        150,
+        ("10:00",),
+        indoor="outdoor",
+    ),
+    Template(
+        "masterclass",
+        "Вязальный клуб",
+        "Вяжем вместе, учим новичков",
+        "Приносите пряжу и спицы или крючок. Опытные вязальщицы покажут основы.",
+        ("dk", "none"),
+        "free",
+        12,
+        120,
+        ("15:00",),
+    ),
+    Template(
+        "games",
+        "Игра «Мафия» для взрослых",
+        "Вечер психологической игры",
+        "Играем в мафию с ведущим. Новичкам объясним правила.",
+        ("dk",),
+        "donation",
+        16,
+        180,
+        ("19:00",),
+    ),
+    Template(
+        "concert",
+        "Квартирник под гитару",
+        "Песни у костра и авторская песня",
+        "Играем любимые песни под гитару — от бардов до рока. Можно прийти со своей гитарой.",
+        ("open", "dk"),
+        "donation",
+        12,
+        150,
+        ("19:00",),
+    ),
+    Template(
+        "sport",
+        "Велопрогулка по окрестностям",
+        "Маршрут 20 км, темп прогулочный",
+        "Проедем по просёлочным дорогам к старой мельнице и обратно. Велосипед свой.",
+        ("open", "none"),
+        "free",
+        12,
+        180,
+        ("11:00",),
+        indoor="outdoor",
+    ),
+    Template(
+        "excursion",
+        "Прогулка с краеведом-любителем",
+        "Истории старых домов",
+        "Житель посёлка расскажет истории старых домов и их хозяев.",
+        ("open", "none"),
+        "free",
+        6,
+        90,
+        ("13:00",),
+        indoor="outdoor",
+    ),
+    Template(
+        "kids",
+        "Игротека для детей",
+        "Настольные и подвижные игры",
+        "Мамы организуют игротеку для детей 4–9 лет: настольные и подвижные игры.",
+        ("dk", "none"),
+        "free",
+        0,
+        90,
+        ("11:00",),
+    ),
+    Template(
+        "other",
+        "Обмен книгами «Буккроссинг»",
+        "Принеси книгу — возьми книгу",
+        "Меняемся книгами, обсуждаем прочитанное за чаем.",
+        ("dk", "open"),
+        "free",
+        0,
+        120,
+        ("15:00",),
+    ),
+    Template(
+        "lecture",
+        "Встреча садоводов",
+        "Готовим сад к зиме",
+        "Обсуждаем обрезку, укрытие растений и обмениваемся семенами.",
+        ("dk", "none"),
+        "free",
+        12,
+        90,
+        ("16:00",),
+    ),
+]
+
+PRICES = {
+    "free": ("free", None, None),
+    "donation": ("donation", None, None),
+    "cheap": ("paid", (100, 150, 200, 250, 300), None),
+    "paid": ("paid", (300, 400, 500, 600), (700, 800, 1000, 1200)),
+}
+
+
+def pick_day(rng: random.Random, *, allow_past: bool) -> int:
+    roll = rng.random()
+    if allow_past and roll < 0.05:
+        return rng.randint(-3, -1)
+    if roll < 0.15:
+        return 0
+    if roll < 0.35:
+        return rng.randint(1, 2)
+    if roll < 0.7:
+        return rng.randint(3, 7)
+    return rng.randint(8, 21)
+
+
+def sessions_for(rng: random.Random, tpl: Template, *, allow_past: bool) -> list[dict[str, Any]]:
+    first = pick_day(rng, allow_past=allow_past)
+    days = sorted({first, *(first + rng.randint(1, 10) for _ in range(tpl.sessions - 1))})
+    return [
+        {"day": day, "time": rng.choice(tpl.times), "duration_min": tpl.minutes} for day in days
+    ]
+
+
+def price_fields(rng: random.Random, tpl: Template) -> dict[str, Any]:
+    price_type, mins, maxs = PRICES[tpl.price]
+    price_min = rng.choice(mins) if mins else None
+    price_max = rng.choice(maxs) if maxs else None
+    return {"price_type": price_type, "price_min": price_min, "price_max": price_max}
+
+
+def build_event(
+    rng: random.Random, key: str, tpl: Template, locality: str, venue: str | None, *, official: bool
+) -> dict[str, Any]:
+    prices = price_fields(rng, tpl)
+    pushkin = official and prices["price_type"] == "paid" and tpl.age >= 12 and rng.random() < 0.6
+    return {
+        "key": key,
+        "title": tpl.title,
+        "short_description": tpl.short,
+        "description": tpl.description,
+        "category": tpl.category,
+        "tags": list(tpl.tags),
+        "locality": locality,
+        "venue": venue,
+        "organizer": "venue" if official else None,
+        **prices,
+        "pushkin_card": pushkin,
+        "age_rating": tpl.age,
+        "indoor": tpl.indoor,
+        "registration_required": tpl.registration,
+        "sessions": sessions_for(rng, tpl, allow_past=not official),
+    }
+
+
+def main() -> None:
+    rng = random.Random(42)  # noqa: S311 — нужна воспроизводимость, не криптостойкость
+    localities = json.loads((SEED_DIR / "localities.json").read_text(encoding="utf-8"))
+    venues = json.loads((SEED_DIR / "venues.json").read_text(encoding="utf-8"))
+    region_of = {loc["key"]: loc["region_code"] for loc in localities}
+    events: list[dict[str, Any]] = []
+
+    def add(tpl: Template, locality: str, venue: str | None, *, official: bool) -> None:
+        key = f"demo-{len(events) + 1:03d}"
+        events.append(build_event(rng, key, tpl, locality, venue, official=official))
+
+    # Официальные: от учреждений, у которых есть org_kind.
+    for venue in venues:
+        kind = venue["org_kind"]
+        if kind is None:
+            continue
+        region = region_of[venue["locality"]]
+        fitting = [
+            t
+            for t in OFFICIAL
+            if kind in t.kinds
+            and (not t.only_venues or venue["key"] in t.only_venues)
+            and t.region in (None, region)
+        ]
+        big = region_of[venue["locality"]] == "53" and venue["locality"] in {
+            "vnovgorod",
+            "staraya_russa",
+            "borovichi",
+            "valday",
+        }
+        count = rng.randint(4, 7) if big else rng.randint(3, 5)
+        if region_of[venue["locality"]] == "16":
+            count = 3
+        for tpl in rng.sample(fitting, min(count, len(fitting))):
+            add(tpl, venue["locality"], venue["key"], official=True)
+
+    # От сообщества: жители и клубы без проверенной организации.
+    open_venues = [v for v in venues if v["org_kind"] is None]
+    dk_venues = [v for v in venues if v["org_kind"] == "dk"]
+    novgorod = [loc["key"] for loc in localities if loc["region_code"] == "53"]
+    for i in range(72):
+        tpl = COMMUNITY[i % len(COMMUNITY)]
+        where = rng.choice(tpl.kinds)
+        if where == "open" and open_venues:
+            venue = rng.choice(open_venues)
+            add(tpl, venue["locality"], venue["key"], official=False)
+        elif where == "dk":
+            venue = rng.choice(dk_venues)
+            add(tpl, venue["locality"], venue["key"], official=False)
+        else:
+            add(tpl, rng.choice(novgorod), None, official=False)
+
+    out = SEED_DIR / "events.json"
+    out.write_text(json.dumps(events, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    print(f"{out}: {len(events)} событий")
+
+
+if __name__ == "__main__":
+    main()

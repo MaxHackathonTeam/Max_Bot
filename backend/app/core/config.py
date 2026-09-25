@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     migrate_database_url: str | None = None
     app_db_password: SecretStr | None = None
     redis_url: str = "redis://redis:6379/0"
+    # Обложки после перекодирования в WebP; отдаются по /media/<uuid>.webp.
+    media_dir: str = "/app/media"
 
     # Доступ
     jwt_secret: SecretStr | None = None
@@ -42,6 +44,8 @@ class Settings(BaseSettings):
     gigachat_api_url: str = ""
     gigachat_model: str = "GigaChat"
     llm_daily_token_budget: int = 200_000
+    # Путь к сертификату НУЦ Минцифры (russian_trusted_root_ca); пусто — системное хранилище.
+    gigachat_ca_bundle: str | None = None
 
     # Геокодеры и источники
     dadata_api_key: SecretStr | None = None

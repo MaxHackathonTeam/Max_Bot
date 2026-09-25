@@ -15,6 +15,7 @@ from app.models.geo import Locality
 from app.models.users import Consent, User
 from app.schemas.users import ConsentState, MeOut, MeUpdate
 from app.services import audit
+from app.services.localities import wkt_point
 
 # Версии документов. Новая версия — повторный запрос согласия.
 CONSENT_VERSIONS: dict[ConsentDoc, str] = {
@@ -223,6 +224,34 @@ async def delete_user_data(session: AsyncSession, user: User) -> None:
         actor_user_id=user_id,
     )
     await session.commit()
+
+
+async def set_location(
+    session: AsyncSession, user: User, locality_id: int, point: tuple[float, float] | None = None
+) -> User:
+    """Населённый пункт из бота (FR-ONB-2); точка — если пришла геопозиция (lat, lon)."""
+    exists = await session.scalar(select(Locality.id).where(Locality.id == locality_id))
+    if exists is None:
+        raise AppError("locality_not_found", "Такой населённый пункт не найден", status_code=422)
+    diff: dict[str, Any] = {}
+    if user.locality_id != locality_id:
+        diff["locality_id"] = [user.locality_id, locality_id]
+        user.locality_id = locality_id
+    if point is not None:
+        user.home_point = wkt_point(*point)
+        # Координаты — ПДн: в журнал только факт обновления.
+        diff["home_point"] = "updated"
+    if diff:
+        await audit.record(
+            session,
+            action="user.update_profile",
+            entity_type="user",
+            entity_id=user.id,
+            actor_user_id=user.id,
+            diff=diff,
+        )
+    await session.commit()
+    return user
 
 
 def is_admin(user: User, settings: Settings, review_role: str | None = None) -> bool:

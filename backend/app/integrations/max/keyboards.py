@@ -41,3 +41,8 @@ def request_geo_location(text: str, *, quick: bool = False) -> Button:
 
 def inline_keyboard(rows: list[list[Button]]) -> dict[str, Any]:
     return {"type": "inline_keyboard", "payload": {"buttons": [r for r in rows if r]}}
+
+
+def request_contact(text: str) -> Button:
+    """schema.yaml: RequestContactButton — клиент пришлёт сообщение с вложением contact."""
+    return {"type": "request_contact", "text": _text(text)}

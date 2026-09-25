@@ -103,3 +103,5 @@ class VerificationRequest(IdMixin, TimestampMixin, Base):
     decision_reason: Mapped[str | None] = mapped_column(Text)
     decided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Последний запуск проверок: повтор не чаще раза в 10 минут.
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

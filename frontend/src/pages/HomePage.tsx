@@ -1,37 +1,45 @@
-import { CellList, CellSimple, Typography } from '@maxhub/max-ui'
-import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
-import { fetchMe } from '../api/client'
-import { useSession } from '../app/session'
-import { ErrorScreen, LoadingScreen } from './Status'
+import { useState } from "react";
+import type { Me } from "../api/client";
+import { hasConsent, homeLocalityId, useMe } from "../app/profile";
+import { readLocal, writeLocal } from "../lib/storage";
+import { FeedPage } from "./FeedPage";
+import { OnboardingPage } from "./OnboardingPage";
+import { ErrorScreen, LoadingScreen } from "./Status";
 
-// Лента и онбординг — этап 2. Пока: приветствие по данным /me и ссылки на заглушки.
+const ONBOARDED = "afisha.onboarded";
+
+function needsOnboarding(me: Me): boolean {
+  if (homeLocalityId(me) === null) return true;
+  // Отказ от согласия («Пока только посмотреть») запоминаем на устройстве.
+  return !hasConsent(me) && readLocal(ONBOARDED) !== "1";
+}
+
+/** Главная: онбординг, пока не выбран населённый пункт, дальше — лента. */
 export function HomePage() {
-  const me = useQuery({ queryKey: ['me'], queryFn: fetchMe })
-  const { inMax } = useSession()
+  const me = useMe();
+  const [finished, setFinished] = useState(false);
 
-  if (me.isPending) return <LoadingScreen />
-  if (me.isError) return <ErrorScreen message={me.error.message} onRetry={() => void me.refetch()} />
+  if (me.isPending) return <LoadingScreen />;
+  if (me.isError)
+    return (
+      <ErrorScreen
+        message={me.error.message}
+        onRetry={() => void me.refetch()}
+      />
+    );
 
-  const name = me.data.first_name
-  return (
-    <main className="screen">
-      <Typography.Headline variant="large-strong" data-testid="greeting">
-        {name ? `Привет, ${name}!` : 'Привет!'}
-      </Typography.Headline>
-      <Typography.Body variant="medium" className="muted">
-        Скоро здесь появятся события рядом с тобой.
-      </Typography.Body>
-      {!inMax && (
-        <Typography.Body variant="small" className="dev-badge">
-          Режим разработки: вход без MAX (DEV_AUTH)
-        </Typography.Body>
-      )}
-      <CellList mode="island" filled>
-        <CellSimple asChild showChevron title="Настройки">
-          <Link to="/settings" />
-        </CellSimple>
-      </CellList>
-    </main>
-  )
+  const localityId = homeLocalityId(me.data);
+  if (localityId === null || (!finished && needsOnboarding(me.data))) {
+    return (
+      <OnboardingPage
+        me={me.data}
+        localityId={localityId}
+        onFinish={() => {
+          writeLocal(ONBOARDED, "1");
+          setFinished(true);
+        }}
+      />
+    );
+  }
+  return <FeedPage me={me.data} localityId={localityId} />;
 }

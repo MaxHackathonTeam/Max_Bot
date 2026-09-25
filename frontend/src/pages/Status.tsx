@@ -1,14 +1,20 @@
-import { Button, Spinner, Typography } from '@maxhub/max-ui'
+import { Button, Spinner, Typography } from "@maxhub/max-ui";
 
 export function LoadingScreen() {
   return (
     <main className="screen screen--center" aria-busy="true">
       <Spinner />
     </main>
-  )
+  );
 }
 
-export function ErrorScreen({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function ErrorScreen({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry?: () => void;
+}) {
   return (
     <main className="screen screen--center">
       <Typography.Body variant="large">{message}</Typography.Body>
@@ -18,5 +24,5 @@ export function ErrorScreen({ message, onRetry }: { message: string; onRetry?: (
         </Button>
       )}
     </main>
-  )
+  );
 }

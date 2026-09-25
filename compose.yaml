@@ -46,9 +46,11 @@ services:
 
   migrate:
     <<: *backend
-    # Миграции — под владельцем БД; затем роли приложения включается вход.
-    command: ["sh", "-c", "alembic upgrade head && python -m app.db.roles"]
+    # Миграции — под владельцем БД; затем роли приложения включается вход;
+    # затем демо-набор (только при SEED_DEMO=1, повторный запуск идемпотентен).
+    command: ["sh", "-c", "alembic upgrade head && python -m app.db.roles && python -m app.seed"]
     environment:
+      SEED_DEMO: ${SEED_DEMO:-1}
       MIGRATE_DATABASE_URL: ${MIGRATE_DATABASE_URL:-postgresql+asyncpg://afisha:afisha@db:5432/afisha}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:-afisha_app}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -61,6 +63,8 @@ services:
     <<: *backend
     ports:
       - "8000:8000"
+    volumes:
+      - media-data:/app/media
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -70,6 +74,10 @@ services:
   worker:
     <<: *backend
     command: ["arq", "--custom-log-dict", "app.workers.settings.ARQ_LOG_CONFIG", "app.workers.settings.WorkerSettings"]
+    volumes:
+      - media-data:/app/media
+      # Корневой сертификат Минцифры для GigaChat: GIGACHAT_CA_BUNDLE=/app/certs/russian_trusted_root_ca.cer
+      - ./infra/certs:/app/certs:ro
     healthcheck:
       test: ["CMD", "arq", "--check", "app.workers.settings.WorkerSettings"]
       interval: 30s
@@ -112,3 +120,4 @@ services:
 volumes:
   db-data:
   redis-data:
+  media-data:
