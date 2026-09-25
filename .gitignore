@@ -222,12 +222,16 @@ __marimo__/
 *.code-workspace
 roadmap-max-hackathon.md
 *.pdf
-
+CLAUDE.md
 docs/
-
+.serena
+AGENTS.md
 # frontend
 node_modules/
 frontend/dist/
 *.tsbuildinfo
-CLAUDE.md
-.serena
+
+
+# Сертификаты для GigaChat кладутся локально
+infra/certs/*
+!infra/certs/README.md

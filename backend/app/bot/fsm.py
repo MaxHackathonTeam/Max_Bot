@@ -10,6 +10,8 @@ STATE_TTL_S = 24 * 3600
 ONBOARDING_LOCALITY = "onboarding.locality"
 ONBOARDING_INTERESTS = "onboarding.interests"
 SETTINGS_LOCALITY = "settings.locality"
+# Админ пишет причину отказа: admin.reason:<e|v>:<id>.
+ADMIN_REASON = "admin.reason"
 IDLE = "idle"
 
 

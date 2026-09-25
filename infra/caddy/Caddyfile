@@ -7,7 +7,12 @@
 		reverse_proxy api:8000
 	}
 
-	# /media/* — volume с обложками (этап 3).
+	# Обложки событий из volume media-data (имена уникальны, файлы не меняются).
+	handle_path /media/* {
+		root * /srv/media
+		header Cache-Control "public, max-age=2592000, immutable"
+		file_server
+	}
 
 	handle {
 		reverse_proxy web:80

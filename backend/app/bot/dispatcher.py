@@ -4,12 +4,13 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import fsm, keyboards, render, texts
+from app.bot.notify import BotNotifier
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.session import SessionMaker
@@ -18,11 +19,18 @@ from app.integrations.max import MaxClient
 from app.models.enums import ConsentDoc
 from app.models.users import User
 from app.schemas.users import MeUpdate
+from app.services import admin as admin_service
+from app.services import drafts as drafts_service
 from app.services import events as events_service
 from app.services import localities as localities_service
+from app.services import moderation as moderation_service
+from app.services import orgs as orgs_service
 from app.services import saved as saved_service
+from app.services import search_parse
 from app.services import users as users_service
+from app.services import verification as verification_service
 from app.services.categories import is_known
+from app.services.notify import Notifier
 
 log = structlog.get_logger(__name__)
 
@@ -61,6 +69,9 @@ class BotContext:
     max: MaxClient
     states: fsm.StateStore = field(default_factory=fsm.MemoryStateStore)
     geo: GeoProvider | None = None
+    # Сообщения другим пользователям (автору события, владельцу организации).
+    notifier: Notifier | None = None
+    llm: Any = None
 
     async def web_app_name(self) -> str | None:
         """Публичное имя бота для кнопки open_app: из env, иначе из GET /me."""
@@ -282,6 +293,62 @@ async def _send_feed(
     await _send(ctx, target, text, keyboard)
 
 
+async def _on_phrase(ctx: BotContext, target: _Target, phrase: str) -> None:
+    """FR-CAT-8: распознать фильтры, показать чипсы и применить FTS fallback."""
+    async with ctx.db() as session:
+        user = await _user(session, target)
+        # Сохраняем понятный ответ для коротких бытовых сообщений; поиск начинается
+        # с явных признаков запроса или при доступном LLM.
+        if ctx.llm is None and not re.search(
+            r"концерт|кино|театр|выставк|музе|спорт|экскурс|бесплатн|пушкин|сегодня|завтра|выходн|афиш",
+            phrase.casefold(),
+        ):
+            await _send(ctx, target, texts.UNKNOWN_TEXT, keyboards.menu_button())
+            return
+        if user.locality_id is None:
+            await _send(ctx, target, texts.UNKNOWN_TEXT, keyboards.menu_button())
+            return
+        parsed = await search_parse.parse(session, phrase, ctx.llm)
+        filters = events_service.EventFilters(
+            locality_id=parsed.locality_id or user.locality_id,
+            radius_km=user.radius_km,
+            date_preset=cast(events_service.DatePreset | None, parsed.date),
+            free=parsed.free,
+            pushkin=parsed.pushkin,
+            categories=list(parsed.categories),
+            q=parsed.q,
+            tier="official",
+            limit=FEED_PAGE,
+        )
+        page = await events_service.search(session, filters)
+        locality = await localities_service.get_out(
+            session, filters.locality_id or user.locality_id
+        )
+    chips = " · ".join(parsed.chips) or "текстовый поиск"
+    if not page.items:
+        await _send(
+            ctx,
+            target,
+            f"Понял так: {chips}\n\nНичего не нашёл — попробуй изменить запрос.",
+            keyboards.menu_button(),
+        )
+        return
+    await _send(
+        ctx,
+        target,
+        render.feed(
+            f"Понял так: {chips}", locality.name if locality else "—", user.radius_km, page.items
+        ),
+        keyboards.feed(
+            await ctx.web_app_name(),
+            [(c.id, c.next_session.id if c.next_session else None) for c in page.items],
+            preset=parsed.date or "today",
+            radius=user.radius_km,
+            next_cursor=page.next_cursor,
+        ),
+    )
+
+
 def _parse_feed(args: list[str]) -> tuple[str, int, int, str | None] | None:
     """feed:<preset>:<radius>:<offset>[:<cursor>] → аргументы; None, если payload битый."""
     if len(args) not in (3, 4) or args[0] not in texts.FEED_TITLES:
@@ -382,6 +449,185 @@ async def _delete_data(ctx: BotContext, target: _Target) -> None:
     await _send(ctx, target, texts.DELETE_DONE)
 
 
+# --- Организатор: меню и подтверждение телефона (§5.3 B.2) ----------------------------
+
+
+async def _send_org_menu(ctx: BotContext, target: _Target) -> None:
+    await _send(ctx, target, texts.ORG_MENU, keyboards.org_menu(await ctx.web_app_name()))
+
+
+def _contact_of(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Вложение contact (schema.yaml: ContactAttachmentPayload: vcf_info, hash, max_info)."""
+    for attachment in body.get("attachments") or []:
+        if attachment.get("type") == "contact":
+            payload = attachment.get("payload")
+            return payload if isinstance(payload, dict) else {}
+    return None
+
+
+async def _on_contact(ctx: BotContext, target: _Target, payload: dict[str, Any]) -> None:
+    max_info = payload.get("max_info") or {}
+    contact = verification_service.ContactData(
+        vcf_info=payload.get("vcf_info"),
+        hash=payload.get("hash"),
+        max_user_id=max_info.get("user_id") if isinstance(max_info, dict) else None,
+    )
+    token = ctx.settings.max_bot_token
+    async with ctx.db() as session:
+        user = await _user(session, target)
+        result = await verification_service.confirm_phone(
+            session,
+            user,
+            contact,
+            token.get_secret_value() if token is not None else "",
+            _notifier(ctx),
+        )
+    reply = {
+        "ok": texts.PHONE_CONFIRMED,
+        "no_request": texts.PHONE_NO_REQUEST,
+        "bad_signature": texts.PHONE_BAD_SIGNATURE,
+        "not_own": texts.PHONE_NOT_OWN,
+    }[result]
+    keyboard = keyboards.phone_request() if result in ("bad_signature", "not_own") else None
+    await _send(ctx, target, reply, keyboard)
+
+
+def _notifier(ctx: BotContext) -> Notifier:
+    if ctx.notifier is not None:
+        return ctx.notifier
+    return BotNotifier(ctx.db, ctx.max, ctx.settings.max_bot_username)
+
+
+# --- Очередь админа (§6 п. 5) ---------------------------------------------------------
+
+
+def _is_admin(ctx: BotContext, target: _Target) -> bool:
+    return target.user_id in ctx.settings.admin_max_user_ids
+
+
+async def _send_queue(ctx: BotContext, target: _Target) -> None:
+    if not _is_admin(ctx, target):
+        await _send(ctx, target, texts.ADMIN_ONLY, keyboards.menu_button())
+        return
+    async with ctx.db() as session:
+        data = await admin_service.queue(session, limit=10)
+    if not data.events and not data.verifications:
+        await _send(ctx, target, texts.QUEUE_EMPTY, keyboards.menu_button())
+        return
+    header = texts.QUEUE_HEADER.format(
+        events=len(data.events), verifications=len(data.verifications)
+    )
+    await _send(ctx, target, header)
+    web_app = await ctx.web_app_name()
+    for item in data.events:
+        when = (
+            f" · {render.when(item.next_starts_at, localities_service.DEFAULT_TIMEZONE)}"
+            if item.next_starts_at
+            else ""
+        )
+        text = texts.QUEUE_EVENT.format(
+            id=item.id,
+            status=item.status,
+            tier=item.trust_tier,
+            title=item.title,
+            org=item.org_name or "—",
+            when=when,
+            reason=item.moderation_reason or "",
+        ).strip()
+        await _send(
+            ctx, target, text, keyboards.queue_event(web_app, item.id, item.organization_id)
+        )
+    for request in data.verifications:
+        steps = "\n".join(
+            f"{'✅' if s['status'] == 'ok' else '❌' if s['status'] == 'failed' else '⏳'} "
+            f"{s['title']}" + (f": {s['message']}" if s.get("message") else "")
+            for s in request.steps
+        )
+        text = texts.QUEUE_VERIFICATION.format(
+            id=request.id,
+            method=request.method,
+            org=request.org_name,
+            inn=request.inn or "—",
+            steps=steps or texts.QUEUE_NO_STEPS,
+        )
+        await _send(ctx, target, text, keyboards.queue_verification(request.id))
+
+
+async def _admin_user(ctx: BotContext, target: _Target) -> User:
+    async with ctx.db() as session:
+        return await _user(session, target)
+
+
+async def _admin_apply(
+    ctx: BotContext, target: _Target, kind: str, entity_id: int, action: str, reason: str | None
+) -> str:
+    """Применяет решение. Возвращает тост; AppError с кодом bad_transition → «уже решено»."""
+    notifier = _notifier(ctx)
+    async with ctx.db() as session:
+        admin = await _user(session, target)
+        try:
+            if kind == "e":
+                await moderation_service.admin_decide(
+                    session, admin, entity_id, action, reason, notifier
+                )
+            elif kind == "v":
+                await verification_service.decide(
+                    session, admin, entity_id, action == "approve", reason, notifier
+                )
+            else:
+                await orgs_service.revoke(session, admin, entity_id, reason)
+        except AppError as exc:
+            if exc.status_code == 409:
+                return texts.QUEUE_ALREADY_TOAST
+            return exc.message
+    return texts.QUEUE_DONE_TOAST
+
+
+async def _on_admin_callback(
+    ctx: BotContext, target: _Target, args: list[str], answer: Answer
+) -> None:
+    if not _is_admin(ctx, target):
+        await answer(texts.ADMIN_ONLY)
+        return
+    kind = args[0]
+    entity_id = int(args[1])
+    action = args[2] if len(args) == 3 else "revoke"
+    if action == "reject":
+        await answer()
+        await ctx.states.set(target.user_id, f"{fsm.ADMIN_REASON}:{kind}:{entity_id}")
+        await _send(ctx, target, texts.QUEUE_ASK_REASON)
+        return
+    reason = texts.QUEUE_REVOKE_REASON if kind == "r" else None
+    toast = await _admin_apply(ctx, target, kind, entity_id, action, reason)
+    await answer(toast)
+    if toast == texts.QUEUE_DONE_TOAST:
+        verdict = texts.QUEUE_VERDICTS[action]
+        await _send(ctx, target, texts.QUEUE_DECIDED.format(id=entity_id, verdict=verdict))
+
+
+def _parse_admin(args: list[str]) -> bool:
+    if len(args) == 3 and args[0] == "e" and args[2] in ("approve", "reject", "hide"):
+        return args[1].isdigit()
+    if len(args) == 3 and args[0] == "v" and args[2] in ("approve", "reject"):
+        return args[1].isdigit()
+    return len(args) == 2 and args[0] == "r" and args[1].isdigit()
+
+
+async def _on_admin_reason(ctx: BotContext, target: _Target, state: str, text: str) -> None:
+    _, kind, raw_id = state.split(":")
+    if len(text) < 5:
+        await _send(ctx, target, texts.QUEUE_REASON_TOO_SHORT)
+        return
+    await ctx.states.set(target.user_id, fsm.IDLE)
+    if not _is_admin(ctx, target):
+        await _send(ctx, target, texts.ADMIN_ONLY)
+        return
+    toast = await _admin_apply(ctx, target, kind, int(raw_id), "reject", text[:500])
+    if toast == texts.QUEUE_DONE_TOAST:
+        toast = texts.QUEUE_DECIDED.format(id=raw_id, verdict=texts.QUEUE_VERDICTS["reject"])
+    await _send(ctx, target, toast, keyboards.menu_button())
+
+
 # --- Входящие ------------------------------------------------------------------------
 
 
@@ -436,7 +682,17 @@ async def _on_message(ctx: BotContext, target: _Target, update: dict[str, Any]) 
     if location is not None:
         await _on_location(ctx, target, *location)
         return
+    contact = _contact_of(body)
+    if contact is not None:
+        await _on_contact(ctx, target, contact)
+        return
     text = (body.get("text") or "").strip()
+    forwarded = isinstance((update.get("message") or {}).get("link"), dict)
+    # Пересланный пост может прийти без собственного текста: MAX кладёт его в link.body.
+    if not text:
+        linked = (update.get("message") or {}).get("link") or {}
+        linked_body = linked.get("message", {}).get("body", {}) if isinstance(linked, dict) else {}
+        text = str(linked_body.get("text") or "").strip()
     command, _, arg = text.partition(" ")
     command = command.split("@", 1)[0].lower()
     if command == "/start":
@@ -455,14 +711,37 @@ async def _on_message(ctx: BotContext, target: _Target, update: dict[str, Any]) 
     elif command == "/delete_me":
         await _send(ctx, target, texts.DELETE_CONFIRM, keyboards.delete_confirm())
     elif command == "/org":
-        await _send_menu(ctx, target, texts.SOON_TOAST)
+        await _send_org_menu(ctx, target)
+    elif command == "/queue":
+        await _send_queue(ctx, target)
+    elif text and (state := await ctx.states.get(target.user_id)).startswith(
+        fsm.ADMIN_REASON + ":"
+    ):
+        await _on_admin_reason(ctx, target, state, text)
     elif text and await ctx.states.get(target.user_id) in (
         fsm.ONBOARDING_LOCALITY,
         fsm.SETTINGS_LOCALITY,
     ):
         await _search_locality(ctx, target, text)
+    elif text and (
+        forwarded
+        or (len(text) >= 40 and re.search(r"\b\d{1,2}[./-]\d{1,2}\b|\b\d{1,2}:\d{2}\b", text))
+    ):
+        async with ctx.db() as session:
+            user = await _user(session, target)
+            event = await drafts_service.create_from_text(session, user, text, None, ctx.llm)
+        web_app = await ctx.web_app_name()
+        await _send(
+            ctx,
+            target,
+            "Сделал черновик из анонса. Проверь поля и дополни их в приложении.",
+            keyboards.open_link(web_app, f"draft_{event.id}")
+            if web_app
+            else keyboards.menu_button(),
+        )
+    elif text:
+        await _on_phrase(ctx, target, text)
     else:
-        # Поиск фразой и черновики из текста — этап 4.
         await _send_menu(ctx, target, texts.UNKNOWN_TEXT)
 
 
@@ -512,6 +791,11 @@ async def _on_callback(
     elif payload == keyboards.CB_SETTINGS:
         await answer()
         await _send_settings(ctx, target)
+    elif payload == keyboards.CB_ORG:
+        await answer()
+        await _send_org_menu(ctx, target)
+    elif prefix == keyboards.P_ADMIN and _parse_admin(args):
+        await _on_admin_callback(ctx, target, args, answer)
     elif payload in keyboards.SOON_CALLBACKS:
         await answer(texts.SOON_TOAST)
     elif payload == keyboards.CB_SET_LOCALITY:

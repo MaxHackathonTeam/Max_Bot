@@ -10,9 +10,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.core.errors import AppError
+from app.core.jobs import JobQueue
 from app.core.security import decode_access_token
+from app.integrations.dadata.party import PartyRegistry
 from app.integrations.geo import GeoProvider
 from app.models.users import User
+from app.services import users as users_service
+from app.services.notify import Notifier, QueuedNotifier
 
 _bearer = HTTPBearer(auto_error=False, description="JWT из POST /api/v1/auth/max")
 
@@ -85,3 +90,38 @@ async def optional_auth(
 
 
 OptionalAuthDep = Annotated[Auth | None, Depends(optional_auth)]
+
+
+def get_jobs(request: Request) -> JobQueue:
+    jobs: JobQueue = request.app.state.jobs
+    return jobs
+
+
+def get_registry(request: Request) -> PartyRegistry | None:
+    registry: PartyRegistry | None = getattr(request.app.state, "registry", None)
+    return registry
+
+
+JobsDep = Annotated[JobQueue, Depends(get_jobs)]
+RegistryDep = Annotated[PartyRegistry | None, Depends(get_registry)]
+
+
+def get_notifier(jobs: JobsDep) -> Notifier:
+    # Из API сообщения только ставятся в очередь: отправляет воркер.
+    return QueuedNotifier(jobs)
+
+
+NotifierDep = Annotated[Notifier, Depends(get_notifier)]
+
+
+def is_admin(auth: Auth, settings: Settings) -> bool:
+    return users_service.is_admin(auth.user, settings, auth.review_role)
+
+
+async def require_admin(auth: AuthDep, settings: SettingsDep) -> Auth:
+    if not is_admin(auth, settings):
+        raise AppError("forbidden", "Раздел только для модераторов", status_code=403)
+    return auth
+
+
+AdminDep = Annotated[Auth, Depends(require_admin)]

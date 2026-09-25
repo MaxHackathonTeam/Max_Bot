@@ -20,7 +20,7 @@ CB_SETTINGS = "menu:settings"
 CB_ORG = "menu:org"
 
 # Пункты меню, которые появятся на следующих этапах: пока отвечаем тостом «скоро».
-SOON_CALLBACKS = frozenset({CB_ORG})
+SOON_CALLBACKS: frozenset[str] = frozenset()
 
 # Подборки: пункт меню → пресет.
 FEED_BY_MENU = {CB_TODAY: "today", CB_WEEKEND: "weekend", CB_PUSHKIN: "pushkin"}
@@ -32,6 +32,9 @@ P_FEED = "feed"  # feed:<preset>:<radius>:<offset>[:<cursor>]
 P_SAVE = "save"  # save:<event_id>:<session_id>
 P_UNSAVE = "unsave"  # unsave:<event_id>:<session_id>
 P_RADIUS = "rad"  # rad:<km>
+P_ADMIN = (
+    "adm"  # adm:e:<event_id>:<approve|reject|hide> | adm:v:<id>:<approve|reject> | adm:r:<org>
+)
 
 INTERESTS_DONE = "done"
 CB_SET_LOCALITY = "set:loc"
@@ -202,3 +205,46 @@ def delete_confirm() -> dict[str, Any]:
             ]
         ]
     )
+
+
+def org_menu(web_app: str | None) -> dict[str, Any]:
+    rows: list[list[kb.Button]] = []
+    if web_app:
+        rows.append([kb.open_app(texts.ORG_OPEN_BUTTON, web_app, "org_0")])
+        rows.append([kb.open_app(texts.ORG_NEW_EVENT_BUTTON, web_app, "draft_0")])
+    rows.append([kb.callback(texts.MENU_BUTTON, CB_MENU)])
+    return kb.inline_keyboard(rows)
+
+
+def phone_request() -> dict[str, Any]:
+    return kb.inline_keyboard([[kb.request_contact(texts.PHONE_REQUEST_BUTTON)]])
+
+
+def queue_event(web_app: str | None, event_id: int, org_id: int | None) -> dict[str, Any]:
+    rows = [
+        [
+            kb.callback(texts.QUEUE_APPROVE_BUTTON, f"{P_ADMIN}:e:{event_id}:approve"),
+            kb.callback(texts.QUEUE_REJECT_BUTTON, f"{P_ADMIN}:e:{event_id}:reject"),
+        ],
+        [kb.callback(texts.QUEUE_HIDE_BUTTON, f"{P_ADMIN}:e:{event_id}:hide")],
+    ]
+    if org_id is not None:
+        rows.append([kb.callback(texts.QUEUE_REVOKE_BUTTON, f"{P_ADMIN}:r:{org_id}")])
+    if web_app:
+        rows.append([kb.open_app(texts.QUEUE_OPEN_BUTTON, web_app, f"ev_{event_id}")])
+    return kb.inline_keyboard(rows)
+
+
+def queue_verification(request_id: int) -> dict[str, Any]:
+    return kb.inline_keyboard(
+        [
+            [
+                kb.callback(texts.QUEUE_APPROVE_BUTTON, f"{P_ADMIN}:v:{request_id}:approve"),
+                kb.callback(texts.QUEUE_REJECT_BUTTON, f"{P_ADMIN}:v:{request_id}:reject"),
+            ]
+        ]
+    )
+
+
+def open_link(web_app: str, payload: str) -> dict[str, Any]:
+    return kb.inline_keyboard([[kb.open_app(texts.EVENT_OPEN_BUTTON, web_app, payload)]])

@@ -5,8 +5,11 @@ from typing import Literal
 from fastapi import APIRouter, Response
 
 from app.api.deps import AuthDep, SessionDep, SettingsDep
+from app.models.enums import EventStatus
 from app.schemas.events import SavedItem
+from app.schemas.manage import MyEventItem
 from app.schemas.users import ConsentsIn, MeOut, MeUpdate
+from app.services import event_editor
 from app.services import saved as saved_service
 from app.services import users as users_service
 
@@ -45,3 +48,10 @@ async def my_saved(
     auth: AuthDep, session: SessionDep, when: Literal["upcoming", "past"] = "upcoming"
 ) -> list[SavedItem]:
     return await saved_service.list_saved(session, auth.user, when)
+
+
+@router.get("/events", response_model=list[MyEventItem], summary="Мои события")
+async def my_events(
+    auth: AuthDep, session: SessionDep, status: EventStatus | None = None
+) -> list[MyEventItem]:
+    return await event_editor.my_events(session, auth.user, status)

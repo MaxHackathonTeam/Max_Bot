@@ -16,6 +16,8 @@ COPY --from=builder /app/.venv /app/.venv
 COPY backend/alembic.ini ./
 COPY backend/app ./app
 COPY data ./data
+# Обложки событий; в compose сюда монтируется volume media-data.
+RUN mkdir -p /app/media && chown app:app /app/media
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \

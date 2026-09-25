@@ -37,6 +37,7 @@ services:
       DOMAIN: ${DOMAIN:?Задай DOMAIN в .env}
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - media-data:/srv/media:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

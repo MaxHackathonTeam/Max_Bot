@@ -1,51 +1,73 @@
-import { Button, CellList, CellSimple, Switch, Typography } from '@maxhub/max-ui'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { deleteMe, RADII, type Me } from '../api/client'
-import { hasConsent, homeLocalityId, useLocality, useMe, useSetLocality, useUpdateMe } from '../app/profile'
-import { Chip } from '../components/Chip'
-import { ConsentPrompt } from '../components/ConsentPrompt'
-import { InterestChips } from '../components/InterestChips'
-import { LocalityPicker } from '../components/LocalityPicker'
-import { writeLocal } from '../lib/storage'
-import { ErrorScreen, LoadingScreen } from './Status'
+import {
+  Button,
+  CellList,
+  CellSimple,
+  Switch,
+  Typography,
+} from "@maxhub/max-ui";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { deleteMe, RADII, type Me } from "../api/client";
+import {
+  hasConsent,
+  homeLocalityId,
+  useLocality,
+  useMe,
+  useSetLocality,
+  useUpdateMe,
+} from "../app/profile";
+import { Chip } from "../components/Chip";
+import { ConsentPrompt } from "../components/ConsentPrompt";
+import { InterestChips } from "../components/InterestChips";
+import { LocalityPicker } from "../components/LocalityPicker";
+import { writeLocal } from "../lib/storage";
+import { ErrorScreen, LoadingScreen } from "./Status";
 
 function Settings({ me }: { me: Me }) {
-  const client = useQueryClient()
-  const navigate = useNavigate()
-  const update = useUpdateMe()
-  const setLocality = useSetLocality()
-  const locality = useLocality(homeLocalityId(me))
-  const [picking, setPicking] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const consent = hasConsent(me)
+  const client = useQueryClient();
+  const navigate = useNavigate();
+  const update = useUpdateMe();
+  const setLocality = useSetLocality();
+  const locality = useLocality(homeLocalityId(me));
+  const [picking, setPicking] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const consent = hasConsent(me);
 
   const remove = useMutation({
     mutationFn: deleteMe,
     onSuccess: () => {
-      writeLocal('afisha.locality_id', null)
-      writeLocal('afisha.onboarded', null)
+      writeLocal("afisha.locality_id", null);
+      writeLocal("afisha.onboarded", null);
       // Сессию заводим заново: /me после удаления — «чистый» пользователь.
-      client.clear()
-      navigate('/', { replace: true })
+      client.clear();
+      navigate("/", { replace: true });
     },
-  })
+  });
 
   return (
     <main className="screen">
-      <Typography.Headline variant="large-strong">⚙️ Настройки</Typography.Headline>
+      <Typography.Headline variant="large-strong">
+        ⚙️ Настройки
+      </Typography.Headline>
 
-      <Typography.Label variant="medium-strong">Населённый пункт</Typography.Label>
+      <Typography.Label variant="medium-strong">
+        Населённый пункт
+      </Typography.Label>
       {picking ? (
         <LocalityPicker
           busy={setLocality.isPending}
-          onPick={(l) => setLocality.mutate({ me, localityId: l.id }, { onSuccess: () => setPicking(false) })}
+          onPick={(l) =>
+            setLocality.mutate(
+              { me, localityId: l.id },
+              { onSuccess: () => setPicking(false) },
+            )
+          }
         />
       ) : (
         <CellList mode="island" filled>
           <CellSimple
-            title={locality.data?.name ?? 'Не выбран'}
+            title={locality.data?.name ?? "Не выбран"}
             subtitle="Изменить"
             showChevron
             onClick={() => setPicking(true)}
@@ -81,7 +103,9 @@ function Settings({ me }: { me: Me }) {
         }
       />
 
-      <Typography.Label variant="medium-strong">Уведомления в боте</Typography.Label>
+      <Typography.Label variant="medium-strong">
+        Уведомления в боте
+      </Typography.Label>
       <CellList mode="island" filled>
         <CellSimple
           title="Напоминания о «Пойду»"
@@ -90,7 +114,9 @@ function Settings({ me }: { me: Me }) {
             <Switch
               checked={me.notify_reminders}
               disabled={!consent}
-              onChange={(e) => update.mutate({ notify_reminders: e.target.checked })}
+              onChange={(e) =>
+                update.mutate({ notify_reminders: e.target.checked })
+              }
               aria-label="Напоминания"
             />
           }
@@ -102,7 +128,9 @@ function Settings({ me }: { me: Me }) {
             <Switch
               checked={me.notify_digest}
               disabled={!consent}
-              onChange={(e) => update.mutate({ notify_digest: e.target.checked })}
+              onChange={(e) =>
+                update.mutate({ notify_digest: e.target.checked })
+              }
               aria-label="Дайджест"
             />
           }
@@ -114,12 +142,28 @@ function Settings({ me }: { me: Me }) {
         </Typography.Body>
       )}
 
+      <Typography.Label variant="medium-strong">Организаторам</Typography.Label>
+      <CellList mode="island" filled>
+        <CellSimple
+          asChild
+          showChevron
+          title="Кабинет организатора"
+          subtitle="Свои события, организация, проверка"
+        >
+          <Link to="/org/0" />
+        </CellSimple>
+      </CellList>
+
       <Typography.Label variant="medium-strong">Документы</Typography.Label>
       <CellList mode="island" filled>
         <CellSimple asChild showChevron title="Условия использования">
           <Link to="/legal/terms" />
         </CellSimple>
-        <CellSimple asChild showChevron title="Политика обработки персональных данных">
+        <CellSimple
+          asChild
+          showChevron
+          title="Политика обработки персональных данных"
+        >
           <Link to="/legal/privacy" />
         </CellSimple>
       </CellList>
@@ -127,11 +171,15 @@ function Settings({ me }: { me: Me }) {
       {confirmDelete ? (
         <div className="notice notice--danger stack">
           <Typography.Body variant="medium">
-            Удалим имя, место, интересы, «Пойду» и подписки. События, которые ты публиковал,
-            останутся без привязки к тебе. Отменить нельзя.
+            Удалим имя, место, интересы, «Пойду» и подписки. События, которые ты
+            публиковал, останутся без привязки к тебе. Отменить нельзя.
           </Typography.Body>
           <div className="row">
-            <Button size="medium" variant="secondary" onClick={() => setConfirmDelete(false)}>
+            <Button
+              size="medium"
+              variant="secondary"
+              onClick={() => setConfirmDelete(false)}
+            >
               Отмена
             </Button>
             <Button
@@ -151,18 +199,28 @@ function Settings({ me }: { me: Me }) {
           )}
         </div>
       ) : (
-        <Button size="large" variant="ghost" onClick={() => setConfirmDelete(true)}>
+        <Button
+          size="large"
+          variant="ghost"
+          onClick={() => setConfirmDelete(true)}
+        >
           🗑 Удалить мои данные
         </Button>
       )}
     </main>
-  )
+  );
 }
 
 /** Настройки (FR-ONB-4) и удаление данных (FR-ONB-5). */
 export function SettingsPage() {
-  const me = useMe()
-  if (me.isPending) return <LoadingScreen />
-  if (me.isError) return <ErrorScreen message={me.error.message} onRetry={() => void me.refetch()} />
-  return <Settings me={me.data} />
+  const me = useMe();
+  if (me.isPending) return <LoadingScreen />;
+  if (me.isError)
+    return (
+      <ErrorScreen
+        message={me.error.message}
+        onRetry={() => void me.refetch()}
+      />
+    );
+  return <Settings me={me.data} />;
 }

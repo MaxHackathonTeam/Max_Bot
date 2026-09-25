@@ -18,6 +18,8 @@ dependencies = [
     "geoalchemy2>=0.15",
     "pyjwt>=2.9",
     "timezonefinder>=6.5",
+    "pillow>=11.0",
+    "python-multipart>=0.0.12",
 ]
 
 [dependency-groups]

@@ -15,6 +15,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.core.jobs import MemoryJobQueue
 from app.main import create_app
 from tests.helpers import BOT_TOKEN, JWT_SECRET, WEBHOOK_SECRET
 
@@ -82,7 +83,7 @@ def app_database_url(owner_database_url: str) -> str:
 
 
 @pytest.fixture
-def db_settings(app_database_url: str) -> Settings:
+def db_settings(app_database_url: str, tmp_path: Path) -> Settings:
     return Settings(
         _env_file=None,
         env="test",
@@ -92,6 +93,7 @@ def db_settings(app_database_url: str) -> Settings:
         max_webhook_secret=SecretStr(WEBHOOK_SECRET),
         jwt_secret=SecretStr(JWT_SECRET),
         admin_max_user_ids=[777],
+        media_dir=str(tmp_path / "media"),
     )
 
 
@@ -100,6 +102,9 @@ async def db_app(db_settings: Settings) -> AsyncIterator[FastAPI]:
     app = create_app(db_settings)
     # Никаких сетевых геокодеров в тестах; нужные тесты подставляют фейковый.
     app.state.geo = None
+    # Задачи копятся в памяти (тест выполняет их сам), реестр ЕГРЮЛ — фейковый или нет.
+    app.state.jobs = MemoryJobQueue()
+    app.state.registry = None
     yield app
     await app.state.db.kw["bind"].dispose()
 

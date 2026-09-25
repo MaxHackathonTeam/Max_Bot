@@ -1,44 +1,64 @@
-import { Button, CellList, CellSimple, Input, Spinner, Typography } from '@maxhub/max-ui'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
-import { nearestLocalities, searchLocalities, type Locality } from '../api/client'
-import { useDebounced } from '../hooks/useDebounced'
+import {
+  Button,
+  CellList,
+  CellSimple,
+  Input,
+  Spinner,
+  Typography,
+} from "@maxhub/max-ui";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import {
+  nearestLocalities,
+  searchLocalities,
+  type Locality,
+} from "../api/client";
+import { useDebounced } from "../hooks/useDebounced";
 
 function label(locality: Locality): string {
-  return locality.municipality ?? locality.region ?? ''
+  return locality.municipality ?? locality.region ?? "";
 }
 
 function currentPosition(): Promise<GeolocationPosition> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      reject(new Error('unsupported'))
-      return
+      reject(new Error("unsupported"));
+      return;
     }
-    navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10_000, maximumAge: 600_000 })
-  })
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      timeout: 10_000,
+      maximumAge: 600_000,
+    });
+  });
 }
 
 /**
  * Выбор населённого пункта (FR-ONB-2): поиск по названию с подсказками или геолокация
  * браузера. В WebView MAX геолокация не гарантирована — основной путь поиск (§9 риски).
  */
-export function LocalityPicker({ onPick, busy }: { onPick: (l: Locality) => void; busy?: boolean }) {
-  const [query, setQuery] = useState('')
-  const q = useDebounced(query.trim())
+export function LocalityPicker({
+  onPick,
+  busy,
+}: {
+  onPick: (l: Locality) => void;
+  busy?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const q = useDebounced(query.trim());
   const search = useQuery({
-    queryKey: ['localities', q],
+    queryKey: ["localities", q],
     queryFn: () => searchLocalities(q),
     enabled: q.length >= 2,
     staleTime: 300_000,
-  })
+  });
   const locate = useMutation({
     mutationFn: async () => {
-      const pos = await currentPosition()
-      return nearestLocalities(pos.coords.latitude, pos.coords.longitude)
+      const pos = await currentPosition();
+      return nearestLocalities(pos.coords.latitude, pos.coords.longitude);
     },
-  })
+  });
 
-  const options = q.length >= 2 ? search.data : locate.data
+  const options = q.length >= 2 ? search.data : locate.data;
   return (
     <div className="stack">
       <Input
@@ -86,5 +106,5 @@ export function LocalityPicker({ onPick, busy }: { onPick: (l: Locality) => void
         </CellList>
       )}
     </div>
-  )
+  );
 }

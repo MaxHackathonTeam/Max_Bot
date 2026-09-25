@@ -1,14 +1,17 @@
 """Лента, карточка события и «Пойду» (FR-CAT, FR-EV, FR-NTF-1)."""
 
 from datetime import date
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request, Response
 
-from app.api.deps import AuthDep, OptionalAuthDep, SessionDep, SettingsDep
+from app.api.deps import AuthDep, JobsDep, NotifierDep, OptionalAuthDep, SessionDep, SettingsDep
 from app.core.errors import AppError
 from app.schemas.events import EventDetail, EventPage, SaveIn, SaveOut
+from app.schemas.manage import EventCreate, EventManage, EventPatch, ReportIn, ReportOut
+from app.services import analytics, event_editor
 from app.services import events as events_service
+from app.services import moderation as moderation_service
 from app.services import saved as saved_service
 from app.services.events import EventFilters, Origin
 from app.services.localities import timezone_for
@@ -93,13 +96,40 @@ async def get_event(
     saved_ids: list[int] = []
     if auth is not None:
         saved_ids = await saved_service.saved_session_ids(session, auth.user.id, event_id)
-    return await events_service.get_detail(
+    detail = await events_service.get_detail(
         session,
         event_id,
         origin=origin,
         saved_session_ids=saved_ids,
         bot_username=settings.max_bot_username,
     )
+    await analytics.record(
+        session, "event_view", user_id=auth.user.id if auth else None, props={"event_id": event_id}
+    )
+    await session.commit()
+    return detail
+
+
+@router.post("/{event_id}/share-card", summary="Подготовить карточку для shareMaxContent")
+async def share_card(
+    event_id: int, auth: AuthDep, session: SessionDep, request: Request
+) -> dict[str, Any]:
+    event = await events_service.get_detail(session, event_id)
+    client = getattr(request.app.state, "max_client", None)
+    if client is None or auth.user.dialog_chat_id is None:
+        raise AppError("bot_unavailable", "Карточка для шеринга пока недоступна", 503)
+    result = await client.send_message(
+        chat_id=auth.user.dialog_chat_id, text=f"{event.title}\n{event.share_url or ''}"
+    )
+    body = result.get("message", result) if isinstance(result, dict) else {}
+    mid = body.get("mid") if isinstance(body, dict) else None
+    if not mid:
+        raise AppError("share_failed", "Не удалось подготовить карточку", 502)
+    await analytics.record(
+        session, "event_share", user_id=auth.user.id, props={"event_id": event_id}
+    )
+    await session.commit()
+    return {"mid": str(mid), "chat_type": "DIALOG"}
 
 
 @router.post("/{event_id}/save", response_model=SaveOut, summary="«Пойду» на сеанс")
@@ -117,3 +147,58 @@ async def unsave_event(
 ) -> SaveOut:
     ids = await saved_service.unsave(session, auth.user, event_id, session_id)
     return SaveOut(saved_session_ids=ids)
+
+
+# --- Управление событием (FR-PUB) ------------------------------------------------------
+
+
+@router.post("", response_model=EventManage, status_code=201, summary="Создать черновик")
+async def create_event(body: EventCreate, auth: AuthDep, session: SessionDep) -> EventManage:
+    event = await event_editor.create(session, auth.user, body)
+    return await event_editor.manage_view(session, auth.user, event.id)
+
+
+@router.get("/{event_id}/manage", response_model=EventManage, summary="Событие для редактирования")
+async def manage_event(event_id: int, auth: AuthDep, session: SessionDep) -> EventManage:
+    return await event_editor.manage_view(session, auth.user, event_id)
+
+
+@router.patch("/{event_id}", response_model=EventManage, summary="Изменить событие")
+async def patch_event(
+    event_id: int,
+    body: EventPatch,
+    auth: AuthDep,
+    session: SessionDep,
+    jobs: JobsDep,
+    notifier: NotifierDep,
+) -> EventManage:
+    await event_editor.patch(session, auth.user, event_id, body, jobs=jobs, notifier=notifier)
+    return await event_editor.manage_view(session, auth.user, event_id)
+
+
+@router.post("/{event_id}/submit", response_model=EventManage, summary="Отправить на публикацию")
+async def submit_event(
+    event_id: int, auth: AuthDep, session: SessionDep, jobs: JobsDep, notifier: NotifierDep
+) -> EventManage:
+    await event_editor.submit(session, auth.user, event_id, jobs=jobs, notifier=notifier)
+    return await event_editor.manage_view(session, auth.user, event_id)
+
+
+@router.post("/{event_id}/cancel", response_model=EventManage, summary="Отменить событие")
+async def cancel_event(event_id: int, auth: AuthDep, session: SessionDep) -> EventManage:
+    await event_editor.cancel(session, auth.user, event_id)
+    return await event_editor.manage_view(session, auth.user, event_id)
+
+
+@router.delete("/{event_id}", status_code=204, summary="Удалить черновик")
+async def delete_event(event_id: int, auth: AuthDep, session: SessionDep) -> Response:
+    await event_editor.remove(session, auth.user, event_id)
+    return Response(status_code=204)
+
+
+@router.post("/{event_id}/report", response_model=ReportOut, summary="Пожаловаться")
+async def report_event(
+    event_id: int, body: ReportIn, auth: AuthDep, session: SessionDep, notifier: NotifierDep
+) -> ReportOut:
+    accepted = await moderation_service.report(session, auth.user, event_id, body, notifier)
+    return ReportOut(accepted=accepted)

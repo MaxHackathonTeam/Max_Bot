@@ -181,11 +181,12 @@ async def test_consent_callback_saves_and_answers(
     assert ask_again["text"] == texts.ASK_LOCALITY
 
 
-async def test_soon_callback_toast(bot: BotContext, max_api: respx.MockRouter) -> None:
+async def test_org_menu_opens_cabinet(bot: BotContext, max_api: respx.MockRouter) -> None:
     await handle_update(bot, _callback(random_max_id(), keyboards.CB_ORG))
-    answer = json.loads(max_api["answer"].calls.last.request.content)
-    assert answer == {"notification": texts.SOON_TOAST}
-    assert _sent(max_api) == []
+    (message,) = _sent(max_api)
+    assert message["text"] == texts.ORG_MENU
+    payloads = [b.get("payload") for b in _buttons(message) if b["type"] == "open_app"]
+    assert payloads == ["org_0", "draft_0"]
 
 
 async def test_help_and_unknown_text(bot: BotContext, max_api: respx.MockRouter) -> None:
@@ -478,3 +479,96 @@ async def test_settings_radius_toggles_and_delete(
     deleted = await db_session.get(User, user.id, populate_existing=True)
     assert deleted is not None
     assert deleted.deleted_at is not None and deleted.max_user_id is None
+
+
+async def test_contact_confirms_phone(
+    bot: BotContext,
+    max_api: respx.MockRouter,
+    db_app: FastAPI,
+    db_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    import hashlib
+    import hmac
+
+    from tests.helpers import BOT_TOKEN, login_as
+    from tests.test_orgs_api import INN, FakeRegistry, _party
+
+    db_app.state.registry = FakeRegistry(_party())
+    user_id = random_max_id()
+    headers, _ = await login_as(db_client, user_id, consents=("terms", "privacy", "org_pd"))
+    org = (
+        await db_client.post(
+            "/api/v1/orgs", json={"name": "ДК Тестово", "kind": "dk"}, headers=headers
+        )
+    ).json()
+    r = await db_client.post(
+        f"/api/v1/orgs/{org['id']}/verification",
+        json={"inn": INN, "site_url": "https://dk.test/"},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+
+    vcf = "BEGIN:VCARD\nTEL:+79120000000\nEND:VCARD"
+
+    def contact(sign: str, owner: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "contact",
+                "payload": {"vcf_info": vcf, "hash": sign, "max_info": {"user_id": owner}},
+            }
+        ]
+
+    good = hmac.new(BOT_TOKEN.encode(), vcf.encode(), hashlib.sha256).hexdigest()
+    stranger = random_max_id()
+    await handle_update(bot, _text(stranger, None, attachments=contact(good, stranger)))
+    assert _sent(max_api)[-1]["text"] == texts.PHONE_NO_REQUEST
+    await handle_update(bot, _text(user_id, None, attachments=contact("bad", user_id)))
+    assert _sent(max_api)[-1]["text"] == texts.PHONE_BAD_SIGNATURE
+    await handle_update(bot, _text(user_id, None, attachments=contact(good, user_id + 1)))
+    assert _sent(max_api)[-1]["text"] == texts.PHONE_NOT_OWN
+    await handle_update(bot, _text(user_id, None, attachments=contact(good, user_id)))
+    assert _sent(max_api)[-1]["text"] == texts.PHONE_CONFIRMED
+
+    status = (await db_client.get(f"/api/v1/orgs/{org['id']}/verification", headers=headers)).json()
+    assert {s["code"]: s["status"] for s in status["steps"]}["phone"] == "ok"
+
+
+async def test_queue_for_admin_only(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    await handle_update(bot, _text(random_max_id(), "/queue"))
+    assert _sent(max_api)[-1]["text"] == texts.ADMIN_ONLY
+    await handle_update(bot, _callback(random_max_id(), "adm:e:1:approve"))
+    assert _answers(max_api)[-1]["notification"] == texts.ADMIN_ONLY
+
+    lat, lon = random_area()
+    locality = await make_locality(db_session, _unique("Очередь"), lat, lon)
+    org = await make_org(db_session)
+    approve = await make_event(db_session, locality, org=org, status="hidden", title="Скрытое")
+    reject = await make_event(
+        db_session, locality, trust_tier=TrustTier.community, status="pending", title="Ждёт"
+    )
+    await db_session.commit()
+
+    await handle_update(bot, _text(777, "/queue"))
+    assert any(m["text"].startswith("В очереди") for m in _sent(max_api))
+
+    await handle_update(bot, _callback(777, f"adm:e:{approve.id}:approve"))
+    assert _answers(max_api)[-1]["notification"] == texts.QUEUE_DONE_TOAST
+    await handle_update(bot, _callback(777, f"adm:e:{approve.id}:approve"))
+    assert _answers(max_api)[-1]["notification"] == texts.QUEUE_ALREADY_TOAST
+
+    await handle_update(bot, _callback(777, f"adm:e:{reject.id}:reject"))
+    assert _sent(max_api)[-1]["text"] == texts.QUEUE_ASK_REASON
+    await handle_update(bot, _text(777, "нет"))
+    assert _sent(max_api)[-1]["text"] == texts.QUEUE_REASON_TOO_SHORT
+    await handle_update(bot, _text(777, "Это реклама, не событие"))
+    assert _sent(max_api)[-1]["text"] == texts.QUEUE_DECIDED.format(
+        id=reject.id, verdict=texts.QUEUE_VERDICTS["reject"]
+    )
+
+    await db_session.refresh(approve)
+    await db_session.refresh(reject)
+    assert approve.status == "published"
+    assert reject.status == "rejected" and reject.moderation_reason == "Это реклама, не событие"
