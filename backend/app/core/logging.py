@@ -2,14 +2,45 @@
 
 import logging
 import sys
+from collections.abc import Mapping, MutableMapping
+from typing import Any
 
 import structlog
+
+_SENSITIVE = (
+    "token",
+    "secret",
+    "password",
+    "phone",
+    "telephone",
+    "auth",
+    "authorization",
+    "init_data",
+)
+
+
+def _mask(value: object, key: str = "") -> object:
+    if isinstance(value, dict):
+        return {
+            k: ("[REDACTED]" if any(s in k.lower() for s in _SENSITIVE) else _mask(v, k))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask(item, key) for item in value]
+    if isinstance(value, str) and any(s in key.lower() for s in _SENSITIVE):
+        return "[REDACTED]"
+    return value
+
+
+def mask_pii(_: Any, __: str, event_dict: MutableMapping[str, Any]) -> Mapping[str, Any]:
+    return {key: _mask(value, key) for key, value in event_dict.items()}
 
 
 def configure_logging(level: str = "INFO") -> None:
     log_level = logging.getLevelNamesMapping().get(level.upper(), logging.INFO)
     shared: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
+        mask_pii,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
     ]

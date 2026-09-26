@@ -1,0 +1,16 @@
+{
+  "_notice": "DEMO FIXTURE: illustrative records, not official PRO.Культура.РФ data.",
+  "events": [
+    {
+      "_id": 900001,
+      "name": "Демо: концерт камерной музыки",
+      "description": "Учебная запись для проверки импортного конвейера.",
+      "dateStart": "2026-10-15T18:00:00+03:00",
+      "isPushkinsCard": true,
+      "category": "concert",
+      "organization": {"_id": 9001, "name": "Демо учреждение", "inn": "5300000000", "locale": {"name": "Великий Новгород"}},
+      "place": {"name": "Демо концертный зал", "address": "Демо адрес"},
+      "url": "https://example.invalid/demo-event"
+    }
+  ]
+}

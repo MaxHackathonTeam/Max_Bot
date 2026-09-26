@@ -49,3 +49,11 @@ class DraftFieldsOut(BaseModel):
     price_type: Literal["free", "paid", "donation"] | None = None
     price_min: int | None = Field(default=None, ge=0)
     ticket_url: str | None = None
+
+
+class EnrichmentOut(BaseModel):
+    category: str | None = None
+    tags: list[str] = Field(default_factory=list, max_length=10)
+    short_description: str | None = Field(default=None, max_length=200)
+    indoor: Literal["indoor", "outdoor", "mixed", "unknown"] = "unknown"
+    youth_score: float | None = Field(default=None, ge=0, le=1)

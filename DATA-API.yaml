@@ -1,0 +1,25 @@
+version: "1.0"
+service: afisha-ryadom
+base_url: "http://localhost:8000/api/v1"
+authentication:
+  review_login:
+    method: POST
+    path: /auth/review-login
+    roles: [user, org_owner_verified, org_owner_unverified, admin]
+    expected_status: [200, 401, 404]
+checks:
+  - {method: GET, path: /health, role: anonymous, expected: [200], response: "{status}"}
+  - {method: GET, path: /events, role: anonymous, expected: [200], response: "items,next_cursor"}
+  - {method: GET, path: /events/{id}, role: anonymous, expected: [200, 404], response: "id,title,sessions"}
+  - {method: POST, path: /search/parse, role: user, expected: [200, 401, 422], response: "date_from,filters"}
+  - {method: POST, path: /drafts/from-text, role: user, expected: [201, 401, 422], response: "id,status"}
+  - {method: POST, path: /events, role: user, expected: [201, 401, 403, 422], response: "id,status"}
+  - {method: POST, path: /events/{id}/save, role: user, expected: [200, 401, 404], response: "saved"}
+  - {method: GET, path: /orgs/mine, role: user, expected: [200, 401], response: "array of organizations"}
+  - {method: POST, path: /orgs, role: user, expected: [201, 401, 422], response: "id,name"}
+  - {method: GET, path: /admin/queue, role: admin, expected: [200, 401, 403], response: "events,verifications"}
+  - {method: GET, path: /admin/audit, role: admin, expected: [200, 401, 403], response: "items"}
+notes:
+  - "Все ошибки имеют форму error.code/message/details."
+  - "Демо-события помечены source=demo и trust_tier=demo."
+  - "Адрес production API и review-пароли передаются жюри отдельно, в репозитории их нет."
