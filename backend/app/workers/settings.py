@@ -28,6 +28,8 @@ from app.models.users import User
 from app.services import moderation as moderation_service
 from app.services import notifications as notifications_service
 from app.services import verification as verification_service
+from app.sources.importer import run_import
+from app.sources.proculture import ProCultureSource
 
 _settings = get_settings()
 configure_logging(_settings.log_level)
@@ -199,6 +201,18 @@ async def schedule_digest(ctx: dict[str, Any]) -> str:
     return str(count)
 
 
+async def import_proculture(ctx: dict[str, Any]) -> str:
+    source = ProCultureSource(
+        _settings.proculture_api_key.get_secret_value() if _settings.proculture_api_key else None
+    )
+    try:
+        async with ctx["db"]() as session:
+            result = await run_import(session, source, [], ctx.get("llm"))
+        return str(result)
+    finally:
+        await source.aclose()
+
+
 def _notifier(ctx: dict[str, Any]) -> Any:
     notifier = ctx.get("notifier")
     if notifier is None:
@@ -263,6 +277,7 @@ class WorkerSettings:
         schedule_reminders,
         deliver_notifications,
         schedule_digest,
+        import_proculture,
     ]
     on_startup = startup
     on_shutdown = shutdown
@@ -272,4 +287,5 @@ class WorkerSettings:
         cron(schedule_reminders, minute={0, 15, 30, 45}),
         cron(deliver_notifications, minute=set(range(60))),
         cron(schedule_digest, weekday={3}, hour={18}, minute={0}),
+        cron(import_proculture, hour={0, 6, 12, 18}, minute={0}),
     ]

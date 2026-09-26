@@ -1,98 +1,68 @@
 # Афиша рядом
 
-Бот и мини-приложение в MAX для поиска и публикации событий в малых городах и сёлах.
-Хакатон MAX, трек «Досуг и развлечения».
-
-> **Статус:** каркас (этап 0). Разделы ниже будут заполнены по мере разработки.
-
-## Назначение
-
-_TODO (этап 6)._ Одна лента событий «рядом со мной» с радиусом по соседним населённым пунктам, фильтр «Пушкинская карта», напоминания и дайджест в чате; быстрая публикация событий организаторами.
-
-## Основной сценарий
-
-_TODO (этап 6)._
+Бот и мини-приложение в MAX для поиска событий рядом с небольшими городами и сёлами. Пользователь выбирает населённый пункт и интересы, открывает ленту, сохраняет событие и получает напоминание. Организатор создаёт событие из формы или текста, после чего оно проходит автоматическую модерацию.
 
 ## Архитектура
 
-_TODO (этап 6)._ Кратко: FastAPI (API + webhook бота) · arq-воркер · PostgreSQL 16 + PostGIS · Redis 7 · React-мини-апп за nginx · Caddy в проде.
+FastAPI API и webhook бота, arq worker, PostgreSQL 16 + PostGIS, Redis 7, React 18 + TypeScript мини-приложение за nginx, Caddy в production. Изменения сущностей пишутся в `audit_log`; официальные и community события выдаются раздельно.
 
-## Быстрый запуск (Docker)
+## Запуск
+
+Требуется Docker Compose v2.24+:
 
 ```bash
-cp .env.example .env   # можно не заполнять: без токенов работает API и мини-апп в браузере
+cp .env.example .env
 docker compose up --build
 ```
 
-Проверка:
+Мини-приложение: `http://localhost:8080`, API: `http://localhost:8000`; PostgreSQL и Redis доступны только внутри Compose. `make migrate` применяет миграции, `make seed` загружает демо-набор. Для разработки нужны Python 3.12 + uv и Node.js 22; зависимости зафиксированы в `backend/uv.lock` и `frontend/package-lock.json`.
 
-```bash
-curl localhost:8000/health    # {"status":"ok"}
-curl localhost:8000/ready     # готовность БД и Redis
-open http://localhost:8080    # мини-апп (заглушка)
-```
+## Переменные окружения
 
-Локальный polling бота (без публичного HTTPS): `docker compose --profile local up --build`.
-
-## Параметры и переменные окружения
-
-Полный список — в [`.env.example`](.env.example). _TODO (этап 6): таблица с описанием._
-
-## Порты
-
-| Порт | Сервис |
-|---|---|
-| 8080 | мини-апп (nginx), `/api/*` проксируется в API |
-| 8000 | API напрямую |
-| 5432, 6379 | не публикуются наружу |
-
-## Зависимости
-
-- Docker с Compose v2.24+.
-- Для разработки: Python 3.12 + [uv](https://docs.astral.sh/uv/), Node.js 22.
-- Зафиксированы в `backend/uv.lock` и `frontend/package-lock.json`.
+Полный список в [`.env.example`](.env.example). Секреты MAX, GigaChat, DaData и PRO.Культура.РФ задаются только в `.env`. `DEV_AUTH=1` допустим только локально. `REVIEW_MODE=1` включает `/api/v1/auth/review-login`; JSON `REVIEW_ACCOUNTS` задаётся человеком, в репозитории паролей нет. `OFFLINE_MODE=1` переключает внешние интеграции на фикстуры и кэш.
 
 ## Внешние сервисы
 
-_TODO (этап 6)._ Не поднимаются в Docker: MAX Bot API, GigaChat, DaData, PRO.Культура.РФ. Условия проверки без них — будут описаны здесь.
+MAX Bot API нужен для реального бота и webhook; GigaChat — для извлечения и модерации; DaData — для реестра организаций; PRO.Культура.РФ — для импорта. Они не поднимаются Docker Compose. Без ключей локальный API работает с fallback и демо-фикстурами, а модерация остаётся в очереди.
 
-## Работа с данными
+## Данные и резервные копии
 
-_TODO (этапы 1–2)._ Миграции: `make migrate`.
+Демо-данные находятся в `data/seed/` и имеют `source=demo`/`trust_tier=demo` с видимым бейджем. Резервная копия: `DATABASE_URL=... BACKUP_DIR=./backups make backup`; хранятся последние 7 дней.
 
-## Тестовые данные
+## Сценарий проверки
 
-_TODO (этап 2)._ Демо-данные помечены `source=demo` / `trust_tier=demo` и видимой плашкой «Демо-данные».
+1. Запусти Compose и проверь `/health`, `/ready`.
+2. Открой `http://localhost:8080`, войди через `DEV_AUTH=1`, прими условия, выбери населённый пункт и интересы.
+3. Проверь вкладки ленты, радиус, дату, цену, Пушкинскую карту, карточку и «Пойду».
+4. Открой настройки и удаление данных; создай черновик организатора и отправь на проверку.
+5. Для API используй [DATA-API.yaml](DATA-API.yaml), для ручного прогона — [docs/QA_CHECKLIST.md](docs/QA_CHECKLIST.md).
 
-## Пошаговый сценарий проверки
+Ошибки имеют `error.code/message/details`, сетевые сбои показывают «Повторить», бот отвечает fallback-текстом, события сообщества не попадают в официальную ленту.
 
-_TODO (этап 6)._
-
-## Ожидаемое поведение
-
-_TODO (этап 6)._
-
-## Известные ограничения
-
-_TODO (этап 6)._
-
-## Остановка и перезапуск
+## Проверки и материалы сдачи
 
 ```bash
-docker compose down        # остановить
-docker compose down -v     # остановить и удалить данные
-docker compose up --build  # перезапуск
+make lint
+make test
+make openapi
+make eval
+cd backend && uv run pip-audit
+cd frontend && npm audit --audit-level=high
 ```
 
-## Разработка
+`openapi.yaml` и `DATA-API.yaml` описывают API. Адрес production API, токен бота и review-пароли передаются жюри отдельно.
+
+## Ограничения
+
+Продакшен требует публичного HTTPS, токена MAX и ключей внешних сервисов. Геолокация в WebView может быть недоступна, поэтому есть выбор населённого пункта. Продажа билетов, встроенная карта, парсинг сайтов и Kubernetes не входят в MVP. Адреса демо-площадок приблизительные.
+
+## Возможности MAX
+
+Используются `startapp` диплинки, `request_geo_location`, проверяемый `request_contact`, `shareMaxContent` с копированием ссылки, BackButton, haptics и уведомления/дайджест от бота.
+
+## Остановка
 
 ```bash
-make lint   # ruff, mypy, eslint, tsc
-make test   # pytest, vitest
+docker compose down
+docker compose up --build
 ```
-
-Pre-commit (ruff, gitleaks): `pipx install pre-commit && pre-commit install`.
-
-## Возможности платформы MAX
-
-_TODO (этап 6)._

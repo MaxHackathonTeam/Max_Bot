@@ -4,9 +4,11 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
@@ -19,6 +21,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import register_error_handlers
 from app.core.jobs import ArqJobQueue
 from app.core.logging import configure_logging
+from app.core.rate_limit import RateLimitMiddleware
 from app.core.request_id import RequestIdMiddleware
 from app.db.session import make_engine, make_sessionmaker
 from app.integrations.dadata.party import DadataPartyRegistry
@@ -101,7 +104,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.registry = registry
     app.state.max_client = client_from_settings(settings)
     app.state.llm = LlmRunner(gigachat, app.state.db, settings.llm_daily_token_budget)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-Id", "X-Max-Bot-Api-Secret"],
+    )
+    app.add_middleware(RateLimitMiddleware, redis=redis)
     app.add_middleware(RequestIdMiddleware)
+
+    @app.middleware("http")
+    async def security_headers(request: Any, call_next: Any) -> Any:
+        response = await call_next(request)
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' https://st.max.ru; "
+            "connect-src 'self' https://st.max.ru; img-src 'self' data: https:; "
+            "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+        )
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        return response
+
     register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(v1_router)

@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     env: Literal["local", "prod", "test"] = "local"
     public_base_url: str = "http://localhost:8080"
+    cors_origins: str = ""
 
     # MAX
     max_bot_token: SecretStr | None = None
@@ -89,6 +90,15 @@ class Settings(BaseSettings):
     @property
     def webhook_url(self) -> str:
         return self.public_base_url.rstrip("/") + "/bot/webhook"
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        raw = self.cors_origins or self.public_base_url
+        return [
+            origin.strip().rstrip("/")
+            for origin in raw.replace(";", ",").split(",")
+            if origin.strip()
+        ]
 
 
 @lru_cache

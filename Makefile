@@ -2,7 +2,7 @@ COMPOSE ?= docker compose
 PROD = $(COMPOSE) -f compose.yaml -f compose.prod.yaml
 BACKEND = cd backend &&
 
-.PHONY: up down logs test lint fmt migrate seed seed-gen openapi eval deploy build-time
+.PHONY: up down logs test lint fmt migrate seed seed-gen openapi eval deploy build-time backup
 
 up:  ## Собрать и поднять всё локально
 	$(COMPOSE) up --build
@@ -38,11 +38,14 @@ seed:  ## Загрузка/обновление демо-данных из data/
 seed-gen:  ## Пересобрать data/seed/events.json из шаблонов
 	$(BACKEND) uv run python scripts/gen_demo_events.py
 
-openapi:  ## Экспорт OpenAPI в openapi.yaml (этап 6 — полноценный)
-	@echo "openapi: экспорт в openapi.yaml будет добавлен вместе с эндпоинтами (этапы 1–6)" && exit 1
+openapi:  ## Экспорт OpenAPI в openapi.yaml
+	$(BACKEND) uv run python scripts/export_openapi.py
+
+backup:  ## Резервная копия PostgreSQL, хранить 7 дней
+	./backend/scripts/backup.sh
 
 eval:  ## Оценка качества LLM (этап 5)
-	@echo "eval: наборы и скрипт появятся на этапе 5" && exit 1
+	$(BACKEND) uv run python scripts/eval.py
 
 deploy:  ## На сервере: обновить код и перезапустить прод
 	git pull --ff-only
