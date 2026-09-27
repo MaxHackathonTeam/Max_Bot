@@ -62,7 +62,7 @@ services:
   api:
     <<: *backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - media-data:/app/media
     depends_on:
@@ -111,7 +111,7 @@ services:
       context: ./frontend
     image: afisha-web:local
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     depends_on:
       api:
         condition: service_healthy
