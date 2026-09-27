@@ -1,39 +1,31 @@
 import { useState } from "react";
-import type { Me } from "../api/client";
-import { hasConsent, homeLocalityId, useMe } from "../app/profile";
+import { hasConsent, useViewer } from "../app/profile";
+import { useSession } from "../app/session";
 import { readLocal, writeLocal } from "../lib/storage";
-import { FeedPage } from "./FeedPage";
+import { FeedPage, FeedSkeleton } from "./FeedPage";
 import { OnboardingPage } from "./OnboardingPage";
-import { ErrorScreen, LoadingScreen } from "./Status";
+import { ErrorScreen } from "./Status";
 
 const ONBOARDED = "afisha.onboarded";
 
-function needsOnboarding(me: Me): boolean {
-  if (homeLocalityId(me) === null) return true;
-  // Отказ от согласия («Пока только посмотреть») запоминаем на устройстве.
-  return !hasConsent(me) && readLocal(ONBOARDED) !== "1";
-}
-
 /** Главная: онбординг, пока не выбран населённый пункт, дальше — лента. */
 export function HomePage() {
-  const me = useMe();
+  const viewer = useViewer();
+  const { inMax } = useSession();
   const [finished, setFinished] = useState(false);
 
-  if (me.isPending) return <LoadingScreen />;
-  if (me.isError)
-    return (
-      <ErrorScreen
-        message={me.error.message}
-        onRetry={() => void me.refetch()}
-      />
-    );
+  if (viewer.loading) return <FeedSkeleton />;
+  if (viewer.error) return <ErrorScreen message={viewer.error.message} onRetry={viewer.retry} />;
 
-  const localityId = homeLocalityId(me.data);
-  if (localityId === null || (!finished && needsOnboarding(me.data))) {
+  // В MAX первым шагом предлагаем согласие; отказ («Пока только посмотреть») запоминаем.
+  const askConsent = inMax && viewer.me !== null && !hasConsent(viewer.me) && readLocal(ONBOARDED) !== "1";
+  if (viewer.localityId === null || (!finished && askConsent)) {
     return (
       <OnboardingPage
-        me={me.data}
-        localityId={localityId}
+        me={viewer.me}
+        askConsent={askConsent}
+        localityId={viewer.localityId}
+        radius={viewer.radius}
         onFinish={() => {
           writeLocal(ONBOARDED, "1");
           setFinished(true);
@@ -41,5 +33,5 @@ export function HomePage() {
       />
     );
   }
-  return <FeedPage me={me.data} localityId={localityId} />;
+  return <FeedPage me={viewer.me} localityId={viewer.localityId} radius={viewer.radius} />;
 }

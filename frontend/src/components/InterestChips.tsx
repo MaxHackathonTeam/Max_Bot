@@ -1,25 +1,28 @@
 import { useCategories } from "../app/profile";
-import { Chip } from "./Chip";
+import { categoryLook } from "../lib/categories";
+import { Chip } from "../ui/Chip";
+import { Skeleton } from "../ui/Skeleton";
 
-export function InterestChips({
-  selected,
-  onToggle,
-}: {
-  selected: string[];
-  onToggle: (slug: string) => void;
-}) {
+export function InterestChips({ selected, onToggle }: { selected: string[]; onToggle: (slug: string) => void }) {
   const categories = useCategories();
+  if (categories.isPending)
+    return (
+      <div className="chips" aria-hidden>
+        {[90, 110, 80, 120, 100].map((w) => (
+          <Skeleton key={w} width={w} height={36} radius={999} />
+        ))}
+      </div>
+    );
   return (
-    <div className="chips chips--wrap">
-      {categories.data?.map((c) => (
-        <Chip
-          key={c.slug}
-          selected={selected.includes(c.slug)}
-          onClick={() => onToggle(c.slug)}
-        >
-          {c.emoji} {c.name}
-        </Chip>
-      ))}
+    <div className="chips">
+      {categories.data?.map((c) => {
+        const Icon = categoryLook(c.slug).icon;
+        return (
+          <Chip key={c.slug} pressed={selected.includes(c.slug)} onClick={() => onToggle(c.slug)} icon={<Icon size={16} aria-hidden />}>
+            {c.name}
+          </Chip>
+        );
+      })}
     </div>
   );
 }

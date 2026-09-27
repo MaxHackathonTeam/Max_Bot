@@ -1,28 +1,15 @@
-import { CellList, CellSimple, Typography } from "@maxhub/max-ui";
-import { useNavigate } from "react-router-dom";
-import {
-  STATUS_FILTERS,
-  STATUS_LABELS,
-  type MyEventItem,
-} from "../api/organizer";
+import { CalendarPlus } from "lucide-react";
+import { STATUS_FILTERS, STATUS_LABELS, type MyEventItem } from "../api/organizer";
 import { formatWhen } from "../lib/format";
-import { Chip } from "./Chip";
+import { Chip } from "../ui/Chip";
+import { EmptyState } from "../ui/EmptyState";
+import { ListRow } from "../ui/ListRow";
 
-export function StatusChips({
-  value,
-  onChange,
-}: {
-  value: string | null;
-  onChange: (s: string | null) => void;
-}) {
+export function StatusChips({ value, onChange }: { value: string | null; onChange: (s: string | null) => void }) {
   return (
-    <div className="chips chips--scroll">
+    <div className="chips chips--scroll" role="group" aria-label="Статус">
       {STATUS_FILTERS.map((s) => (
-        <Chip
-          key={s ?? "all"}
-          selected={value === s}
-          onClick={() => onChange(s)}
-        >
+        <Chip key={s ?? "all"} pressed={value === s} onClick={() => onChange(s)}>
           {s ? STATUS_LABELS[s] : "Все"}
         </Chip>
       ))}
@@ -32,34 +19,24 @@ export function StatusChips({
 
 /** События автора или организации по статусам; нажатие открывает форму редактирования. */
 export function ManagedEventList({ items }: { items: MyEventItem[] }) {
-  const navigate = useNavigate();
   if (items.length === 0) {
-    return (
-      <Typography.Body variant="medium" className="muted empty">
-        Событий пока нет.
-      </Typography.Body>
-    );
+    return <EmptyState icon={<CalendarPlus size={28} aria-hidden />} title="Событий пока нет" />;
   }
   return (
-    <CellList mode="island" filled>
+    <div className="list">
       {items.map((e) => {
-        const when = e.next_starts_at
-          ? formatWhen(e.next_starts_at, e.timezone)
-          : "без будущих сеансов";
+        const when = e.next_starts_at ? formatWhen(e.next_starts_at, e.timezone) : "без будущих сеансов";
         const reason =
-          e.moderation_reason && ["rejected", "hidden"].includes(e.status)
-            ? ` · ${e.moderation_reason}`
-            : "";
+          e.moderation_reason && ["rejected", "hidden"].includes(e.status) ? ` · ${e.moderation_reason}` : "";
         return (
-          <CellSimple
+          <ListRow
             key={e.id}
+            to={`/draft/${e.id}`}
             title={e.title || "Без названия"}
             subtitle={`${STATUS_LABELS[e.status] ?? e.status} · ${when}${reason}`}
-            showChevron
-            onClick={() => navigate(`/draft/${e.id}`)}
           />
         );
       })}
-    </CellList>
+    </div>
   );
 }

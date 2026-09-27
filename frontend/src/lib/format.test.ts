@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDistance, formatPrice, formatTime, formatWhen } from "./format";
+import { formatDateParts, formatDistance, formatPrice, formatTime, formatWhen } from "./format";
 
 describe("formatWhen", () => {
   it("показывает время в поясе события", () => {
@@ -53,5 +53,22 @@ describe("formatDistance", () => {
     [23.6, "24 км"],
   ])("%s → %s", (km, text) => {
     expect(formatDistance(km)).toBe(text);
+  });
+});
+
+describe("formatDateParts", () => {
+  it("раскладывает дату для карточки в поясе события", () => {
+    expect(formatDateParts("2026-10-03T15:00:00Z", "Europe/Moscow")).toEqual({
+      day: "3",
+      month: "окт",
+      weekday: "Сб",
+      time: "18:00",
+      long: "Сб, 3 октября",
+    });
+  });
+
+  it("переход через полночь по местному времени меняет день", () => {
+    const p = formatDateParts("2026-09-30T21:30:00Z", "Asia/Yekaterinburg");
+    expect([p.day, p.month, p.weekday, p.time]).toEqual(["1", "окт", "Чт", "02:30"]);
   });
 });

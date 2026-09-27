@@ -342,7 +342,7 @@ GitHub может сообщить, что shell access не предостав�
 ```bash
 git clone git@github.com:MaxHackathonTeam/Max_Bot.git ~/afisha
 cd ~/afisha
-c
+python3 backend/scripts/configure_env.py
 ```
 
 Скрипт сам создаст `.env` с правами `600`, сгенерирует независимые пароли PostgreSQL, JWT и
@@ -880,6 +880,107 @@ docker image prune -f
   не удаляй Docker volumes и файлы БД.
 - **Нет HTTPS:** проверь A-запись, UFW и облачный firewall на 80/443; на VPS смотри
   `docker compose logs --tail=100 caddy`. Не перезапускай Caddy многократно при неверной DNS-записи.
+- **Снаружи открыты 5432/6379/8000/8080:** пошагово — раздел ниже.
+
+### Открыты приватные порты (5432, 6379, 8000, 8080)
+
+**Сначала исключи ложную тревогу:** `nc -zv -w3 <IP> 54321` (там заведомо пусто). Если и он
+«succeeded» — соединения принимает VPN/прокси в TUN-режиме на Mac, а не сервер (так и было
+27.09.2026). Выключи VPN или проверь порты через check-host.net → TCP.
+
+В репозитории `db` и `redis` порты не публикуют вовсе, а `api`/`web` с 27.09.2026 слушают только
+`127.0.0.1`. Если порт всё равно открыт — его держит либо стек, запущенный без `compose.prod.yaml`,
+либо что-то постороннее на сервере.
+
+**Шаг 1. Mac: отправить фикс `compose.yaml` на GitHub** (если ещё не отправлен):
+
+```bash
+cd ~/VSProjects/Max_Bot
+git add compose.yaml && git commit -m "Порты api/web только на 127.0.0.1" && git push
+```
+
+**Шаг 2. VPS: выяснить, кто держит порты.**
+
+```bash
+ssh vse-vezde
+cd ~/afisha
+sudo ss -tlnp | grep -E ':(5432|6379|8000|8080)\b'
+docker ps --format 'table {{.Names}}\t{{.Ports}}'
+grep -c '^COMPOSE_FILE=compose.yaml:compose.prod.yaml' .env   # должно быть ≥ 1
+docker compose version                                          # нужно ≥ 2.24
+git status --short                                              # локальных правок быть не должно
+```
+
+Как читать `ss`: в конце строки `users:(("docker-proxy",…))` — порт открыл контейнер;
+`("postgres",…)` / `("redis-server",…)` — служба, установленная в систему.
+
+**Шаг 3. Закрыть порты — по результату шага 2.**
+
+- *Системные Postgres/Redis* (в `ss` — `postgres`, `redis-server`). Проекту не нужны, он использует
+  свои контейнеры:
+  ```bash
+  sudo systemctl disable --now postgresql redis-server
+  ```
+  Если сервис называется иначе — `systemctl list-units --type=service | grep -Ei 'postgres|redis'`.
+- *Посторонние контейнеры* (в `docker ps` имя не `afisha-…`, но порт 5432/6379/8000/8080).
+  Убедись, что они не нужны, затем `docker stop <имя> && docker rm <имя>`.
+- *Наши контейнеры `afisha-…` с портами.* Значит, prod-файл не подхватился или на сервере правлен
+  `compose.yaml`. Если `grep` вернул `0` — допиши в `.env` строку
+  `COMPOSE_FILE=compose.yaml:compose.prod.yaml`. Если `git status` показал правки — посмотри их
+  (`git diff`) и откати: `git checkout -- compose.yaml compose.prod.yaml`. Затем пересоздай стек
+  (данные в volumes сохраняются; **не добавляй `-v`**):
+  ```bash
+  git pull --ff-only
+  docker compose down
+  docker compose up -d --build --wait
+  docker ps --format 'table {{.Names}}\t{{.Ports}}'
+  ```
+  Порты должны быть только у `afisha-caddy-1` (80, 443).
+
+**Шаг 4. Mac: проверить снаружи.**
+
+```bash
+for p in 5432 6379 8000 8080; do nc -zv -w3 77.110.105.235 $p; done   # все — timeout/refused
+curl -sI https://vse-vezde.ru/health | head -1                        # HTTP/2 200
+```
+
+Дополнительно включи в панели хостера облачный firewall (входящие только 22, 80, 443 TCP и 443
+UDP) — он работает до Docker и страхует от повторения. UFW Docker-порты не закрывает.
+
+**Шаг 5. VPS: сменить пароли БД — только если в шаге 2 порт 5432 был у `afisha-db`.**
+Postgres не меняет пароль по новому `.env` в существующем volume, поэтому пароль владельца меняем
+в самой БД, а пароль `afisha_app` выставит `migrate` при перезапуске:
+
+```bash
+cd ~/afisha
+cp .env .env.bak && chmod 600 .env.bak
+NEW_PG=$(openssl rand -hex 32); NEW_APP=$(openssl rand -hex 32)
+printf "ALTER ROLE afisha PASSWORD '%s';\n" "$NEW_PG" \
+  | docker compose exec -T db psql -U afisha -d afisha -v ON_ERROR_STOP=1
+sed -i \
+  -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$NEW_PG|" \
+  -e "s|^APP_DB_PASSWORD=.*|APP_DB_PASSWORD=$NEW_APP|" \
+  -e "s|^MIGRATE_DATABASE_URL=.*|MIGRATE_DATABASE_URL=postgresql+asyncpg://afisha:$NEW_PG@db:5432/afisha|" \
+  -e "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+asyncpg://afisha_app:$NEW_APP@db:5432/afisha|" \
+  .env
+unset NEW_PG NEW_APP
+docker compose up -d --force-recreate --wait
+curl -s https://vse-vezde.ru/ready
+```
+
+Если `psql` вывел ошибку — остановись: `.env` ещё не менялся. Если `/ready` не 200 — пришли
+`docker compose logs --tail=50 migrate api` (без секретов); **не возвращай `.env.bak`**: пароль в БД
+уже новый. После успешной проверки: `shred -u .env.bak`.
+
+**Шаг 6. VPS: проверить следы взлома — если Redis (любой) был открыт.** Открытый Redis без пароля
+часто используют, чтобы записать SSH-ключ или задание cron:
+
+```bash
+sudo crontab -l; crontab -l; ls -la /etc/cron.d
+sudo cat /root/.ssh/authorized_keys; cat ~/.ssh/authorized_keys
+```
+
+Чужие ключи или непонятные задания — удали и сообщи; при сомнениях проще пересоздать VPS.
 
 ## Отчёт о готовности
 

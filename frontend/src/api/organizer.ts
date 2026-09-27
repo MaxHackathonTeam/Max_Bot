@@ -64,25 +64,12 @@ export interface OrgInput {
   description?: string | null;
 }
 
-export interface RegistryLookup {
-  found: boolean;
-  inn: string;
-  ogrn: string | null;
-  name: string | null;
-  status: string | null;
-  address: string | null;
-  region: string | null;
-  kind: "legal" | "individual" | null;
-}
-
 export const fetchMyOrgs = () => api<Org[]>("/orgs/mine");
 export const fetchOrg = (id: number) => api<Org>(`/orgs/${id}`);
 export const createOrg = (body: OrgInput) =>
   api<Org>("/orgs", { method: "POST", body: JSON.stringify(body) });
 export const updateOrg = (id: number, body: OrgInput) =>
   api<Org>(`/orgs/${id}`, { method: "PATCH", body: JSON.stringify(body) });
-export const lookupInn = (inn: string) =>
-  api<RegistryLookup>(`/orgs/lookup?${new URLSearchParams({ inn })}`);
 
 // --- Команда и приглашения ---------------------------------------------------------------
 
@@ -191,8 +178,9 @@ export interface Venue {
 export interface VenueInput {
   name: string;
   address?: string | null;
-  lat: number;
-  lon: number;
+  /** Без координат площадка ставится в центр населённого пункта (тогда locality_id обязателен). */
+  lat?: number | null;
+  lon?: number | null;
   org_id?: number | null;
   locality_id?: number | null;
 }

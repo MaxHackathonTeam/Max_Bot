@@ -49,34 +49,59 @@ describe("bridge actions", () => {
     );
   });
 
-  it("на телефоне делится через shareMaxContent", async () => {
+  const target = {
+    text: "Концерт",
+    maxLink: "https://max.ru/b?startapp=ev_1",
+    webLink: "https://afisha.example/event/1",
+  };
+
+  it("в MAX на телефоне делится через shareMaxContent", async () => {
     const shareMaxContent = vi.fn();
-    setWebApp({ platform: "android", shareMaxContent });
-    await expect(
-      shareContent("Концерт", "https://max.ru/b?startapp=ev_1"),
-    ).resolves.toBe("shared");
+    setWebApp({ initData: "signed", platform: "android", shareMaxContent });
+    await expect(shareContent(target)).resolves.toBe("shared");
     expect(shareMaxContent).toHaveBeenCalledWith({
       text: "Концерт",
       link: "https://max.ru/b?startapp=ev_1",
     });
   });
 
-  it("в вебе копирует ссылку, а без буфера открывает max.ru/:share", async () => {
+  it("в MAX web копирует диплинк, а без буфера открывает max.ru/:share", async () => {
     const shareMaxContent = vi.fn();
-    setWebApp({ platform: "web", shareMaxContent });
+    setWebApp({ initData: "signed", platform: "web", shareMaxContent });
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
-    await expect(
-      shareContent("Концерт", "https://max.ru/b?startapp=ev_1"),
-    ).resolves.toBe("copied");
+    await expect(shareContent(target)).resolves.toBe("copied");
+    expect(writeText).toHaveBeenCalledWith(target.maxLink);
     expect(shareMaxContent).not.toHaveBeenCalled();
 
     vi.stubGlobal("navigator", {});
-    await expect(shareContent("Концерт", null)).resolves.toBe("opened");
+    await expect(shareContent({ ...target, maxLink: null })).resolves.toBe("opened");
     expect(window.open).toHaveBeenCalledWith(
       webShareUrl("Концерт"),
       "_blank",
       "noopener,noreferrer",
     );
+  });
+
+  it("в браузере — navigator.share со ссылкой на сайт", async () => {
+    setWebApp(undefined);
+    const share = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { share });
+    await expect(shareContent(target)).resolves.toBe("shared");
+    expect(share).toHaveBeenCalledWith({ title: "Концерт", url: target.webLink });
+
+    share.mockRejectedValue(Object.assign(new Error("cancel"), { name: "AbortError" }));
+    await expect(shareContent(target)).resolves.toBe("cancelled");
+  });
+
+  it("в браузере без share копирует ссылку, без буфера — failed", async () => {
+    setWebApp(undefined);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    await expect(shareContent(target)).resolves.toBe("copied");
+    expect(writeText).toHaveBeenCalledWith(target.webLink);
+
+    vi.stubGlobal("navigator", {});
+    await expect(shareContent(target)).resolves.toBe("failed");
   });
 });

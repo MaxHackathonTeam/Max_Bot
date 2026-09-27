@@ -1,6 +1,7 @@
 // Действия с внешним миром через Bridge с fallback по платформе (§4.3 FR-EV-4, §9 риски):
 // shareMaxContent/HapticFeedback работают только в мобильных клиентах MAX,
-// openLink — только из обработчика нажатия. Вне MAX — обычные браузерные API.
+// openLink — только из обработчика нажатия. Вне MAX — обычные браузерные API
+// (window.open, navigator.share, буфер обмена).
 
 import { getWebApp } from "./webApp";
 
@@ -30,35 +31,58 @@ export function webShareUrl(text: string, link?: string | null): string {
   return `https://max.ru/:share?${new URLSearchParams({ text: full })}`;
 }
 
-export type ShareResult = "shared" | "copied" | "opened";
+export type ShareResult = "shared" | "copied" | "opened" | "cancelled" | "failed";
+
+export interface ShareTarget {
+  text: string;
+  /** Диплинк в мини-приложение (https://max.ru/<bot>?startapp=…) — для MAX. */
+  maxLink: string | null;
+  /** Обычная ссылка на сайт — для браузера. */
+  webLink: string;
+}
+
+async function copy(text: string): Promise<boolean> {
+  if (!navigator.clipboard?.writeText) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Нет разрешения или не https.
+    return false;
+  }
+}
 
 /**
- * Поделиться событием. iOS/Android — shareMaxContent({text, link});
- * web/desktop — копируем ссылку в буфер, а если нельзя — открываем max.ru/:share.
+ * Поделиться событием.
+ * MAX на телефоне — shareMaxContent({text, link}); MAX web/desktop — ссылка в буфер,
+ * иначе max.ru/:share. Браузер — системное «Поделиться», иначе ссылка в буфер;
+ * "failed" — показать ссылку пользователю.
  */
-export async function shareContent(
-  text: string,
-  link: string | null,
-): Promise<ShareResult> {
+export async function shareContent({ text, maxLink, webLink }: ShareTarget): Promise<ShareResult> {
   const webApp = getWebApp();
-  if (isMobileMax(webApp?.platform) && webApp?.shareMaxContent) {
+  if (webApp?.initData) {
+    if (isMobileMax(webApp.platform) && webApp.shareMaxContent) {
+      try {
+        await webApp.shareMaxContent(maxLink ? { text, link: maxLink } : { text });
+        return "shared";
+      } catch {
+        // Падаем в веб-вариант ниже.
+      }
+    }
+    if (maxLink && (await copy(maxLink))) return "copied";
+    openExternal(webShareUrl(text, maxLink));
+    return "opened";
+  }
+
+  if (typeof navigator.share === "function") {
     try {
-      await webApp.shareMaxContent(link ? { text, link } : { text });
+      await navigator.share({ title: text, url: webLink });
       return "shared";
-    } catch {
-      // Падаем в веб-вариант ниже.
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return "cancelled";
     }
   }
-  if (link && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(link);
-      return "copied";
-    } catch {
-      // Буфер обмена недоступен (нет разрешения или не https).
-    }
-  }
-  openExternal(webShareUrl(text, link));
-  return "opened";
+  return (await copy(webLink)) ? "copied" : "failed";
 }
 
 /** Лёгкая тактильная отдача на мобильных; на web/desktop ничего не делает. */

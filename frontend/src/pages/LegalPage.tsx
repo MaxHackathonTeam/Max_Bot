@@ -1,5 +1,6 @@
-import { Typography } from "@maxhub/max-ui";
+import { FileText } from "lucide-react";
 import { useParams } from "react-router-dom";
+import { EmptyState } from "../ui/EmptyState";
 
 // ЧЕРНОВИКИ (§10 техдока): финальную редакцию проверяет человек, см. docs/HUMAN_TODO.md.
 // Версия совпадает с CONSENT_VERSIONS в backend/app/services/users.py — при правке
@@ -28,6 +29,7 @@ const DOCS: Record<string, Doc> = {
         "2. Какие данные мы собираем",
         [
           "Идентификатор пользователя MAX, имя и фамилия, username и язык из профиля MAX.",
+          "На сайте без входа через MAX — случайный идентификатор гостя; выбранные место и радиус хранятся на устройстве.",
           "Выбранный населённый пункт и, если ты отправил геолокацию, точка на карте.",
           "Радиус поиска, интересы, настройки уведомлений, сохранённые события («Пойду»).",
           "Год рождения — только если ты сам его укажешь (для скрытия событий 18+).",
@@ -54,8 +56,7 @@ const DOCS: Record<string, Doc> = {
         "5. Кому передаём",
         [
           "Мессенджеру MAX — для доставки сообщений бота.",
-          "Сервисам геокодирования (DaData, OpenStreetMap Nominatim) — только текст поискового запроса или координаты, без имени и идентификатора.",
-          "Сервису GigaChat — только тексты событий для разметки и модерации, без данных зрителей.",
+          "Сервисам геокодирования — только текст адреса или координаты, без имени и идентификатора.",
         ],
       ],
       [
@@ -83,7 +84,7 @@ const DOCS: Record<string, Doc> = {
       [
         "2. Зачем",
         [
-          "Проверить, что ты действительно представляешь организацию: сверка с ЕГРЮЛ/ЕГРИП через DaData, код на сайте, проверка страницы.",
+          "Проверить, что ты действительно представляешь организацию: сверка реквизитов с открытыми реестрами, код на сайте, проверка страницы.",
           "Показывать события организации в разделе «Официальные» с отметкой «Организатор проверен».",
         ],
       ],
@@ -138,33 +139,29 @@ export function LegalPage() {
   const doc = DOCS[useParams().doc ?? ""];
   if (!doc) {
     return (
-      <main className="screen">
-        <Typography.Body variant="medium">Документ не найден.</Typography.Body>
+      <main className="page page--narrow">
+        <EmptyState icon={<FileText size={28} aria-hidden />} title="Документ не найден" />
       </main>
     );
   }
   return (
-    <main className="screen legal">
-      <Typography.Headline variant="large-strong">
-        {doc.title}
-      </Typography.Headline>
-      <Typography.Body variant="small" className="notice">
-        Черновик · редакция от {VERSION.split("-").reverse().join(".")}
-      </Typography.Body>
-      {doc.sections.map(([heading, paragraphs]) => (
-        <section key={heading} className="stack">
-          <Typography.Headline variant="small-strong">
-            {heading}
-          </Typography.Headline>
-          <ul>
-            {paragraphs.map((p) => (
-              <li key={p}>
-                <Typography.Body variant="medium">{p}</Typography.Body>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
+    <main className="page page--narrow legal">
+      <div className="stack stack--loose">
+        <div className="page-head">
+          <p className="eyebrow">Черновик · редакция от {VERSION.split("-").reverse().join(".")}</p>
+          <h1 className="h1">{doc.title}</h1>
+        </div>
+        {doc.sections.map(([heading, paragraphs]) => (
+          <section key={heading} className="stack stack--tight">
+            <h2 className="h3">{heading}</h2>
+            <ul>
+              {paragraphs.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
     </main>
   );
 }
