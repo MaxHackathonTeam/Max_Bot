@@ -31,6 +31,50 @@ export function formatWhen(iso: string, timeZone: string): string {
   return `${WEEKDAYS[weekday]} ${p.day}.${p.month}, ${p.hour}:${p.minute}`;
 }
 
+const MONTHS_SHORT = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+const MONTHS_GENITIVE = [
+  "января",
+  "февраля",
+  "марта",
+  "апреля",
+  "мая",
+  "июня",
+  "июля",
+  "августа",
+  "сентября",
+  "октября",
+  "ноября",
+  "декабря",
+];
+
+export interface DateParts {
+  /** «7» — без ведущего нуля, для крупной цифры на карточке. */
+  day: string;
+  /** «сен» */
+  month: string;
+  /** «Пн» */
+  weekday: string;
+  /** «18:00» */
+  time: string;
+  /** «Пн, 7 сентября» */
+  long: string;
+}
+
+/** Части даты для афишной карточки — в часовом поясе события. */
+export function formatDateParts(iso: string, timeZone: string): DateParts {
+  const p = parts(iso, timeZone);
+  const monthIndex = Number(p.month) - 1;
+  const weekday = WEEKDAYS[new Date(Date.UTC(Number(p.year), monthIndex, Number(p.day))).getUTCDay()];
+  const day = String(Number(p.day));
+  return {
+    day,
+    month: MONTHS_SHORT[monthIndex],
+    weekday,
+    time: `${p.hour}:${p.minute}`,
+    long: `${weekday}, ${day} ${MONTHS_GENITIVE[monthIndex]}`,
+  };
+}
+
 /** «18:00» в часовом поясе события — для конца сеанса. */
 export function formatTime(iso: string, timeZone: string): string {
   const p = parts(iso, timeZone);

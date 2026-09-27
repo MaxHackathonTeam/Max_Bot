@@ -1,8 +1,9 @@
 // MAX Bridge (§9): скрипт https://st.max.ru/js/max-web-app.js создаёт window.WebApp.
+// Это прогрессивное улучшение: сайт работает и без него, в обычном браузере.
 // Описаны только используемые поля; всё вызывается через optional chaining — вне MAX объекта нет.
 
 const BRIDGE_SRC = "https://st.max.ru/js/max-web-app.js";
-const BRIDGE_TIMEOUT_MS = 4000;
+const BRIDGE_TIMEOUT_MS = 3000;
 
 export interface WebAppBackButton {
   show(): void;
@@ -43,10 +44,12 @@ export function getWebApp(): WebApp | undefined {
   return window.WebApp;
 }
 
-/** Загружает Bridge; не блокирует старт дольше таймаута (вне MAX скрипт может быть недоступен). */
+let bridgePromise: Promise<void> | null = null;
+
+/** Загружает Bridge в фоне: не дольше таймаута, ошибка загрузки не ломает сайт. */
 export function loadBridge(): Promise<void> {
   if (window.WebApp) return Promise.resolve();
-  return new Promise((resolve) => {
+  bridgePromise ??= new Promise((resolve) => {
     const script = document.createElement("script");
     script.src = BRIDGE_SRC;
     script.async = true;
@@ -59,34 +62,24 @@ export function loadBridge(): Promise<void> {
     script.onerror = done;
     document.head.appendChild(script);
   });
+  return bridgePromise;
 }
 
-export interface Launch {
-  /** Строка initData для POST /auth/max. */
-  initData: string;
-  /** Открыто внутри MAX (есть подписанная initData). */
-  inMax: boolean;
+/** Подписанная initData, если сайт открыт внутри MAX; иначе null. */
+export function maxInitData(): string | null {
+  return getWebApp()?.initData || null;
 }
 
 /**
- * Вне MAX — фейковая initData без подписи. Бэкенд примет её только при DEV_AUTH=1
- * (в проде запрещено), иначе ответит 401 и приложение попросит открыть его из бота.
- * Диплинк для проверки вне MAX: ?startapp=ev_1.
+ * Фейковая initData без подписи для локальной разработки (?dev_user=<id>).
+ * Бэкенд примет её только при DEV_AUTH=1 (в проде запрещено) — иначе 401.
  */
-export function getLaunch(search: string = window.location.search): Launch {
-  const initData = getWebApp()?.initData;
-  if (initData) return { initData, inMax: true };
-
-  const params = new URLSearchParams(search);
+export function devInitData(userId: number, startParam?: string | null): string {
   const fake = new URLSearchParams({
-    user: JSON.stringify({
-      id: Number(params.get("dev_user") ?? 100000001),
-      first_name: "Гость",
-    }),
+    user: JSON.stringify({ id: userId, first_name: "Гость" }),
     auth_date: String(Math.floor(Date.now() / 1000)),
     hash: "dev",
   });
-  const startParam = params.get("startapp");
   if (startParam) fake.set("start_param", startParam);
-  return { initData: fake.toString(), inMax: false };
+  return fake.toString();
 }

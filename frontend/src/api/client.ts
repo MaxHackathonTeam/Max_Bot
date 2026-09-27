@@ -62,9 +62,19 @@ export class ApiError extends Error {
 }
 
 let accessToken: string | null = null;
+let onUnauthorized: (() => void) | null = null;
 
 export function setAccessToken(token: string | null): void {
   accessToken = token;
+}
+
+export function hasAccessToken(): boolean {
+  return accessToken !== null;
+}
+
+/** Вызывается, когда сервер отверг наш токен (истёк, пользователь удалён). */
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  onUnauthorized = handler;
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -73,7 +83,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body !== undefined && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const sentToken = accessToken;
+  if (sentToken) headers.set("Authorization", `Bearer ${sentToken}`);
 
   let response: Response;
   try {
@@ -84,6 +95,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (response.status === 204) return undefined as T;
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
+    if (response.status === 401 && sentToken && sentToken === accessToken) onUnauthorized?.();
     const error = (
       body as {
         error?: {

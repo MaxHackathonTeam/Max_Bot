@@ -95,8 +95,14 @@ export function toEventQuery(
 export function sheetFilterCount(f: FeedFilters): number {
   return (
     f.categories.length +
+    (f.radius !== null ? 1 : 0) +
     (f.priceMax !== null ? 1 : 0) +
     (f.format !== "all" ? 1 : 0) +
     (f.sort ? 1 : 0)
   );
+}
+
+/** Сбросить фильтры из панели, не трогая вкладку, даты и поиск. */
+export function resetPanel(f: FeedFilters): FeedFilters {
+  return { ...f, categories: [], priceMax: null, format: "all", sort: null, radius: null };
 }

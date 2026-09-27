@@ -1,25 +1,31 @@
+import { BadgeCheck, CreditCard, MonitorPlay } from "lucide-react";
 import type { EventCard } from "../api/client";
+import { Badge } from "../ui/Badge";
 
 /** Видимая плашка демо-данных (§7.2): обязательна везде, где показано демо-событие. */
 export function DemoBadge() {
-  return <span className="badge badge--demo">Демо-данные</span>;
+  return <Badge tone="demo">Демо-данные</Badge>;
 }
 
-export function EventBadges({ card }: { card: EventCard }) {
+export function EventBadges({ card, withPrice = false }: { card: EventCard; withPrice?: boolean }) {
   return (
     <div className="badges">
       {card.is_demo && <DemoBadge />}
       {card.org?.verified && (
-        <span className="badge badge--verified">✓ Организатор проверен</span>
+        <Badge tone="verified" icon={<BadgeCheck size={14} aria-hidden />}>
+          Организатор проверен
+        </Badge>
       )}
       {card.pushkin_card && (
-        <span className="badge badge--pushkin">💳 Пушкинская карта</span>
+        <Badge tone="pushkin" icon={<CreditCard size={14} aria-hidden />}>
+          Пушкинская карта
+        </Badge>
       )}
-      {card.price_type === "free" && <span className="badge">Бесплатно</span>}
-      {card.is_online && <span className="badge">Онлайн</span>}
-      {card.age_rating !== null && (
-        <span className="badge">{card.age_rating}+</span>
+      {withPrice && card.price_type === "free" && <Badge tone="free">Бесплатно</Badge>}
+      {card.is_online && (
+        <Badge icon={<MonitorPlay size={14} aria-hidden />}>Онлайн</Badge>
       )}
+      {card.age_rating !== null && <Badge>{card.age_rating}+</Badge>}
     </div>
   );
 }

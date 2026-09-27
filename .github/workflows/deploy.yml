@@ -1,0 +1,134 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Коммит для выкладки (пусто — последний на выбранной ветке). Так же делается откат."
+        required: false
+        default: ""
+
+# Выкладки идут строго по одной; начатую не отменяем, чтобы не оставить сервер на полпути.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Выбрать коммит
+        id: target
+        env:
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_SHA: ${{ inputs.sha }}
+          REF_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha="${RUN_SHA:-${INPUT_SHA:-$REF_SHA}}"
+          if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::Некорректный sha: $sha"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Настроить SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "::error::Нужны секреты DEPLOY_SSH_KEY и DEPLOY_KNOWN_HOSTS в environment production"
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Выложить на сервер
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -o BatchMode=yes \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=30 \
+              -p "${DEPLOY_PORT:-22}" \
+              "$DEPLOY_USER@$DEPLOY_HOST" \
+              bash -s -- "$SHA" <<'REMOTE'
+          set -euo pipefail
+          target="$1"
+          cd ~/afisha
+
+          compose() { docker compose -f compose.yaml -f compose.prod.yaml "$@"; }
+
+          # Домен берём из .env на сервере; сам .env в лог не выводим.
+          domain="$(sed -n 's/^DOMAIN=//p' .env | tail -n1 | tr -d "\"'[:space:]")"
+          if [ -z "$domain" ]; then
+            echo "::error::В ~/afisha/.env не задан DOMAIN"
+            exit 1
+          fi
+
+          check_ready() {
+            for _ in 1 2 3 4 5 6; do
+              if curl -fsS --max-time 10 -o /dev/null "https://$domain/ready"; then
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
+
+          # Внутри `if` set -e не срабатывает, поэтому шаги связаны через &&.
+          deploy() {
+            git checkout --quiet --detach "$1" &&
+              compose up -d --build --wait --remove-orphans &&
+              check_ready
+          }
+
+          previous="$(git rev-parse HEAD)"
+          echo "Сейчас на сервере: $previous"
+          git fetch --quiet origin
+          echo "Выкладываю: $target"
+
+          if deploy "$target"; then
+            echo "Готово: $(git rev-parse HEAD) отвечает на /ready"
+            exit 0
+          fi
+
+          echo "::error::Выкладка $target не прошла, откатываюсь на $previous"
+          if deploy "$previous"; then
+            echo "Откат на $previous выполнен, /ready отвечает"
+          else
+            echo "::error::Откат тоже не прошёл — нужен ручной разбор (docs/DEPLOY.md, раздел CI/CD)"
+          fi
+          exit 1
+          REMOTE
+
+      - name: Убрать ключ
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

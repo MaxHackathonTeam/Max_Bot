@@ -1,44 +1,72 @@
-import { Button, Input, Spinner, Typography } from "@maxhub/max-ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { ChevronDown, CreditCard, Search, SearchX, SlidersHorizontal } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { fetchEvents, type Me, type Radius, type Tier } from "../api/client";
-import { useLocality } from "../app/profile";
-import { useSession } from "../app/session";
-import { Chip } from "../components/Chip";
-import { EventCardView } from "../components/EventCardView";
-import { FilterSheet } from "../components/FilterSheet";
+import { useLocality, useSetLocality } from "../app/profile";
+import { EventCardSkeleton, EventCardView } from "../components/EventCardView";
+import { FilterPanel } from "../components/FilterPanel";
+import { FormErrors } from "../components/FormErrors";
+import { LocalityPicker } from "../components/LocalityPicker";
 import { useDebounced } from "../hooks/useDebounced";
 import { useOnVisible } from "../hooks/useOnVisible";
 import {
   deeplinkFeed,
   feedToParams,
   parseFeed,
+  resetPanel,
   sheetFilterCount,
   toEventQuery,
   type FeedFilters,
 } from "../lib/feedParams";
+import { Button } from "../ui/Button";
+import { Chip } from "../ui/Chip";
+import { EmptyState } from "../ui/EmptyState";
+import { Input } from "../ui/Field";
+import { Sheet } from "../ui/Sheet";
+import { Skeleton } from "../ui/Skeleton";
+import { Tabs } from "../ui/Tabs";
+import { ErrorBlock } from "./Status";
 
-const TABS: [Tier, string][] = [
-  ["official", "Официальные"],
-  ["community", "От сообщества"],
+const TABS: { value: Tier; label: string }[] = [
+  { value: "official", label: "Официальные" },
+  { value: "community", label: "От сообщества" },
 ];
 const MAX_RADIUS: Radius = 50;
 
+export function FeedSkeleton() {
+  return (
+    <main className="page" aria-busy>
+      <div className="feed">
+        <aside className="feed__aside" />
+        <div className="feed__main">
+          <Skeleton width="50%" height={34} />
+          <Skeleton height={44} radius={10} />
+          <div className="feed__grid">
+            <EventCardSkeleton />
+            <EventCardSkeleton />
+            <EventCardSkeleton />
+            <EventCardSkeleton />
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
 /** Лента (FR-CAT): вкладки доверия не смешиваются, фильтры — в query-строке. */
-export function FeedPage({ me, localityId }: { me: Me; localityId: number }) {
+export function FeedPage({ me, localityId, radius: baseRadius }: { me: Me | null; localityId: number; radius: Radius }) {
   const [params, setParams] = useSearchParams();
   const filters = parseFeed(params);
-  const [sheetOpen, setSheetOpen] = useState(false);
   const [search, setSearch] = useState(filters.q);
   const q = useDebounced(search.trim());
   const locality = useLocality(localityId);
-  const { inMax } = useSession();
+  const setLocality = useSetLocality();
+  const [placeOpen, setPlaceOpen] = useState(false);
+  const [draft, setDraft] = useState<FeedFilters | null>(null);
 
-  const setFilters = (next: FeedFilters) =>
-    setParams(feedToParams(next), { replace: true });
-  const toggle = (patch: Partial<FeedFilters>) =>
-    setFilters({ ...filters, ...patch });
+  const setFilters = (next: FeedFilters) => setParams(feedToParams(next), { replace: true });
+  const toggle = (patch: Partial<FeedFilters>) => setFilters({ ...filters, ...patch });
 
   // Диплинк feed_<preset> → фильтры (один раз при входе).
   useEffect(() => {
@@ -51,8 +79,8 @@ export function FeedPage({ me, localityId }: { me: Me; localityId: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- синхронизируем только поиск
   }, [q]);
 
-  const radius = (filters.radius ?? me.radius_km) as Radius;
-  const query = toEventQuery(filters, localityId, radius);
+  const radius = filters.radius ?? baseRadius;
+  const query = toEventQuery(filters, localityId, baseRadius);
   const feed = useInfiniteQuery({
     queryKey: ["events", query],
     queryFn: ({ pageParam }) => fetchEvents({ ...query, cursor: pageParam }),
@@ -65,172 +93,156 @@ export function FeedPage({ me, localityId }: { me: Me; localityId: number }) {
   );
   const items = feed.data?.pages.flatMap((p) => p.items) ?? [];
   const extra = sheetFilterCount(filters);
+  const dateChip = (date: FeedFilters["date"], text: string) => (
+    <Chip pressed={filters.date === date} onClick={() => toggle({ date: filters.date === date ? null : date })}>
+      {text}
+    </Chip>
+  );
 
   return (
-    <main className="screen">
-      <header className="feed-header">
-        <div>
-          <Typography.Headline variant="medium-strong">
-            📍 {locality.data?.name ?? "…"}
-          </Typography.Headline>
-          <Typography.Body variant="small" className="muted">
-            в радиусе {radius} км
-          </Typography.Body>
-        </div>
-        <nav className="row">
-          <Link className="icon-link" to="/saved" aria-label="Мои «Пойду»">
-            ⭐
-          </Link>
-          <Link className="icon-link" to="/settings" aria-label="Настройки">
-            ⚙️
-          </Link>
-        </nav>
-      </header>
-
-      {!inMax && (
-        <Typography.Body variant="small" className="dev-badge">
-          Режим разработки: вход без MAX (DEV_AUTH)
-        </Typography.Body>
-      )}
-
-      <Input
-        type="search"
-        placeholder="Поиск: хор, ярмарка, кино…"
-        value={search}
-        onChange={(e) => setSearch(e.target.value.slice(0, 200))}
-        aria-label="Поиск событий"
-      />
-
-      <div className="tabs" role="tablist">
-        {TABS.map(([tier, text]) => (
-          <button
-            key={tier}
-            type="button"
-            role="tab"
-            aria-selected={filters.tier === tier}
-            className={filters.tier === tier ? "tab tab--on" : "tab"}
-            onClick={() => toggle({ tier })}
-          >
-            {text}
-          </button>
-        ))}
-      </div>
-      {filters.tier === "community" && (
-        <Typography.Body variant="small" className="muted">
-          События от жителей и непроверенных организаторов. Уточняй детали перед
-          поездкой.
-        </Typography.Body>
-      )}
-
-      <div className="chips chips--scroll">
-        <Chip
-          selected={filters.date === "today"}
-          onClick={() =>
-            toggle({ date: filters.date === "today" ? null : "today" })
-          }
-        >
-          Сегодня
-        </Chip>
-        <Chip
-          selected={filters.date === "tomorrow"}
-          onClick={() =>
-            toggle({ date: filters.date === "tomorrow" ? null : "tomorrow" })
-          }
-        >
-          Завтра
-        </Chip>
-        <Chip
-          selected={filters.date === "weekend"}
-          onClick={() =>
-            toggle({ date: filters.date === "weekend" ? null : "weekend" })
-          }
-        >
-          Выходные
-        </Chip>
-        <Chip
-          selected={filters.free}
-          onClick={() => toggle({ free: !filters.free })}
-        >
-          Бесплатно
-        </Chip>
-        <Chip
-          selected={filters.pushkin}
-          onClick={() => toggle({ pushkin: !filters.pushkin })}
-        >
-          💳 Пушкинская
-        </Chip>
-        <Chip selected={extra > 0} onClick={() => setSheetOpen(true)}>
-          ⚙︎ Фильтры{extra > 0 ? ` · ${extra}` : ""}
-        </Chip>
-      </div>
-
-      {feed.isPending && <Spinner />}
-      {feed.isError && (
-        <div className="stack">
-          <Typography.Body variant="medium">
-            {feed.error.message}
-          </Typography.Body>
-          <Button
-            size="medium"
-            variant="secondary"
-            onClick={() => void feed.refetch()}
-          >
-            Повторить
-          </Button>
-        </div>
-      )}
-
-      {feed.isSuccess && items.length === 0 && (
-        <div className="empty stack" data-testid="feed-empty">
-          <Typography.Headline variant="small-strong">
-            В радиусе {radius} км ничего не нашлось
-          </Typography.Headline>
-          {radius < MAX_RADIUS ? (
-            <Button
-              size="large"
-              stretched
-              onClick={() => toggle({ radius: MAX_RADIUS })}
-            >
-              Расширить до {MAX_RADIUS} км
+    <main className="page">
+      <div className="feed">
+        <aside className="feed__aside" aria-label="Фильтры">
+          <h2 className="h3">Фильтры</h2>
+          <FilterPanel value={filters} radius={baseRadius} onChange={setFilters} />
+          {extra > 0 && (
+            <Button variant="ghost" size="sm" onClick={() => setFilters(resetPanel(filters))}>
+              Сбросить фильтры
             </Button>
-          ) : (
-            <Typography.Body variant="medium" className="muted">
-              Попробуй убрать фильтры или загляни на вкладку «
-              {filters.tier === "official" ? "От сообщества" : "Официальные"}».
-            </Typography.Body>
+          )}
+        </aside>
+
+        <div className="feed__main">
+          <div className="page-head">
+            <p className="eyebrow">Афиша · в радиусе {radius} км</p>
+            <button type="button" className="place-switch" onClick={() => setPlaceOpen(true)} aria-label="Сменить населённый пункт">
+              <span className="h1">{locality.data?.name ?? "…"}</span>
+              <ChevronDown size={22} aria-hidden />
+            </button>
+          </div>
+
+          <div className="input-wrap">
+            <Search size={18} aria-hidden />
+            <Input
+              type="search"
+              placeholder="Поиск: хор, ярмарка, кино…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value.slice(0, 200))}
+              aria-label="Поиск событий"
+            />
+          </div>
+
+          <Tabs label="Источник событий" value={filters.tier} onChange={(tier) => toggle({ tier })} items={TABS} />
+          {filters.tier === "community" && (
+            <p className="small muted">События от жителей и непроверенных организаторов. Уточняй детали перед поездкой.</p>
+          )}
+
+          <div className="chips chips--scroll">
+            {dateChip("today", "Сегодня")}
+            {dateChip("tomorrow", "Завтра")}
+            {dateChip("weekend", "Выходные")}
+            <Chip pressed={filters.free} onClick={() => toggle({ free: !filters.free })}>
+              Бесплатно
+            </Chip>
+            <Chip
+              pressed={filters.pushkin}
+              icon={<CreditCard size={15} aria-hidden />}
+              onClick={() => toggle({ pushkin: !filters.pushkin })}
+            >
+              Пушкинская
+            </Chip>
+            <span className="filter-toggle">
+              <Chip
+                pressed={extra > 0}
+                icon={<SlidersHorizontal size={15} aria-hidden />}
+                count={extra || undefined}
+                onClick={() => setDraft(filters)}
+              >
+                Фильтры
+              </Chip>
+            </span>
+          </div>
+
+          {feed.isPending && (
+            <div className="feed__grid" aria-busy>
+              <EventCardSkeleton />
+              <EventCardSkeleton />
+              <EventCardSkeleton />
+              <EventCardSkeleton />
+            </div>
+          )}
+          {feed.isError && <ErrorBlock message={feed.error.message} onRetry={() => void feed.refetch()} />}
+
+          {feed.isSuccess && items.length === 0 && (
+            <div data-testid="feed-empty">
+              <EmptyState
+                icon={<SearchX size={28} aria-hidden />}
+                title={`В радиусе ${radius} км ничего не нашлось`}
+                text={
+                  radius < MAX_RADIUS
+                    ? "Можно поискать чуть дальше."
+                    : `Попробуй убрать фильтры или загляни на вкладку «${filters.tier === "official" ? "От сообщества" : "Официальные"}».`
+                }
+                action={
+                  radius < MAX_RADIUS && (
+                    <Button variant="primary" onClick={() => toggle({ radius: MAX_RADIUS })}>
+                      Расширить до {MAX_RADIUS} км
+                    </Button>
+                  )
+                }
+              />
+            </div>
+          )}
+
+          {items.length > 0 && (
+            <div className="feed__grid">
+              {items.map((card) => (
+                <EventCardView key={card.id} card={card} />
+              ))}
+            </div>
+          )}
+          {feed.hasNextPage && (
+            <div ref={sentinel} className="row">
+              <Button variant="secondary" block loading={feed.isFetchingNextPage} onClick={() => void feed.fetchNextPage()}>
+                Показать ещё
+              </Button>
+            </div>
           )}
         </div>
-      )}
-
-      <div className="stack">
-        {items.map((card) => (
-          <EventCardView key={card.id} card={card} />
-        ))}
       </div>
-      {feed.hasNextPage && (
-        <div ref={sentinel} className="stack">
-          <Button
-            size="medium"
-            variant="secondary"
-            loading={feed.isFetchingNextPage}
-            onClick={() => void feed.fetchNextPage()}
-          >
-            Показать ещё
-          </Button>
-        </div>
-      )}
 
-      {sheetOpen && (
-        <FilterSheet
-          value={filters}
-          radius={me.radius_km}
-          onClose={() => setSheetOpen(false)}
-          onApply={(next) => {
-            setFilters(next);
-            setSheetOpen(false);
-          }}
+      <Sheet
+        open={draft !== null}
+        onClose={() => setDraft(null)}
+        title="Фильтры"
+        footer={
+          <div className="row">
+            <Button variant="ghost" onClick={() => draft && setDraft(resetPanel(draft))}>
+              Сбросить
+            </Button>
+            <Button
+              variant="primary"
+              className="grow"
+              onClick={() => {
+                if (draft) setFilters(draft);
+                setDraft(null);
+              }}
+            >
+              Показать
+            </Button>
+          </div>
+        }
+      >
+        {draft && <FilterPanel value={draft} radius={baseRadius} onChange={setDraft} />}
+      </Sheet>
+
+      <Sheet open={placeOpen} onClose={() => setPlaceOpen(false)} title="Где искать события">
+        <LocalityPicker
+          busy={setLocality.isPending}
+          onPick={(l) => setLocality.mutate({ me, localityId: l.id }, { onSuccess: () => setPlaceOpen(false) })}
         />
-      )}
+        <FormErrors error={setLocality.error} />
+      </Sheet>
     </main>
   );
 }
