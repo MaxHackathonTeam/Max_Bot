@@ -152,6 +152,8 @@ activemq-data/
 .env
 .envrc
 .venv
+# Локальные утилиты с вводом секретов
+/tools/get_max_bot_name.py
 env/
 venv/
 ENV/
