@@ -1,27 +1,17 @@
-"""Справочник населённых пунктов (§7.5): поиск, ближайший, ленивое пополнение из геокодера."""
+"""Справочник населённых пунктов (§7.5): поиск (pg_trgm) и ближайший (PostGIS) по локальной БД."""
 
 from functools import lru_cache
 from typing import Any
 
-import structlog
 from geoalchemy2 import Geography, Geometry, WKTElement
 from sqlalchemy import ColumnElement, Select, cast, desc, func, nulls_last, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from timezonefinder import TimezoneFinder
 
-from app.integrations.geo import GeoAddress, GeoPlace, GeoProvider
-from app.models.enums import AuditActor, LocalityKind
 from app.models.geo import Locality
-from app.schemas.geo import AddressOut, LocalityOut
-from app.services import audit
-
-log = structlog.get_logger(__name__)
+from app.schemas.geo import LocalityOut
 
 DEFAULT_TIMEZONE = "Europe/Moscow"
-# Геокодер не спрашиваем, если в справочнике уже нашлось столько вариантов.
-ENOUGH_LOCAL_RESULTS = 3
-# Точка ближе этого расстояния к НП из справочника — считаем, что пользователь в нём.
-NEAR_ENOUGH_M = 3_000
 NEAREST_MAX_M = 50_000
 SAME_PLACE_M = 5_000
 
@@ -100,67 +90,10 @@ async def _search_db(session: AsyncSession, query: str, limit: int) -> list[Loca
     return [_to_out(row) for row in (await session.execute(stmt)).all()]
 
 
-async def upsert_place(session: AsyncSession, place: GeoPlace) -> Locality:
-    """Находит НП в справочнике (по ФИАС или по имени рядом с точкой) или создаёт его."""
-    existing = None
-    if place.fias_id:
-        existing = await session.scalar(select(Locality).where(Locality.fias_id == place.fias_id))
-    if existing is None:
-        existing = await session.scalar(
-            select(Locality)
-            .where(
-                func.lower(Locality.name) == place.name.lower(),
-                func.ST_DWithin(Locality.point, geo_point(place.lat, place.lon), SAME_PLACE_M),
-            )
-            .limit(1)
-        )
-    if existing is not None:
-        return existing
-    kind = place.kind if place.kind in LocalityKind.__members__ else LocalityKind.other
-    locality = Locality(
-        fias_id=place.fias_id,
-        name=place.name[:255],
-        kind=kind,
-        region=place.region,
-        region_code=place.region_code,
-        municipality=place.municipality,
-        point=wkt_point(place.lat, place.lon),
-        timezone=timezone_for(place.lat, place.lon),
-        source=place.source or "geocoder",
-    )
-    session.add(locality)
-    await session.flush()
-    await audit.record(
-        session,
-        action="locality.create",
-        entity_type="locality",
-        entity_id=locality.id,
-        actor_type=AuditActor.system,
-        diff={"name": locality.name, "source": locality.source, "region": locality.region},
-    )
-    return locality
-
-
-async def search(
-    session: AsyncSession, query: str, geo: GeoProvider | None, limit: int = 10
-) -> list[LocalityOut]:
+async def search(session: AsyncSession, query: str, limit: int = 10) -> list[LocalityOut]:
     query = query.strip()
     if len(query) < 2:
         return []
-    found = await _search_db(session, query, limit)
-    if len(found) >= ENOUGH_LOCAL_RESULTS or geo is None:
-        return found
-    try:
-        places = await geo.suggest_localities(query, 5)
-    except Exception as exc:
-        # Геокодер — только дополнение: без него работаем по справочнику.
-        log.warning("geo_suggest_failed", error=type(exc).__name__)
-        return found
-    if not places:
-        return found
-    for place in places:
-        await upsert_place(session, place)
-    await session.commit()
     return await _search_db(session, query, limit)
 
 
@@ -178,41 +111,7 @@ async def _nearest_db(
 
 
 async def nearest(
-    session: AsyncSession, lat: float, lon: float, geo: GeoProvider | None, limit: int = 5
+    session: AsyncSession, lat: float, lon: float, limit: int = 5
 ) -> list[LocalityOut]:
-    """Ближайшие НП; если рядом со справочными нет — спрашиваем геокодер и добавляем."""
-    close = await _nearest_db(session, lat, lon, NEAR_ENOUGH_M, 1)
-    if not close and geo is not None:
-        try:
-            place = await geo.reverse_locality(lat, lon)
-        except Exception as exc:
-            log.warning("geo_reverse_failed", error=type(exc).__name__)
-            place = None
-        if place is not None:
-            await upsert_place(session, place)
-            await session.commit()
+    """Ближайшие НП из справочника в радиусе NEAREST_MAX_M."""
     return await _nearest_db(session, lat, lon, NEAREST_MAX_M, limit)
-
-
-def _address_out(address: GeoAddress) -> AddressOut:
-    return AddressOut(
-        value=address.value,
-        lat=address.lat,
-        lon=address.lon,
-        fias_id=address.fias_id,
-        locality_name=address.locality.name if address.locality else None,
-    )
-
-
-async def suggest_addresses(
-    geo: GeoProvider | None, query: str, limit: int = 5
-) -> list[AddressOut]:
-    query = query.strip()
-    if geo is None or len(query) < 3:
-        return []
-    try:
-        addresses = await geo.suggest_addresses(query, limit)
-    except Exception as exc:
-        log.warning("geo_address_suggest_failed", error=type(exc).__name__)
-        return []
-    return [_address_out(a) for a in addresses]

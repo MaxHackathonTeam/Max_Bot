@@ -8,7 +8,6 @@ from app.api.deps import (
     AuthDep,
     JobsDep,
     NotifierDep,
-    RegistryDep,
     SessionDep,
     SettingsDep,
     is_admin,
@@ -25,7 +24,6 @@ from app.schemas.orgs import (
     OrgCreate,
     OrgOut,
     OrgUpdate,
-    RegistryLookupOut,
     VerificationOut,
     VerificationStart,
 )
@@ -49,11 +47,6 @@ async def my_orgs(auth: AuthDep, session: SessionDep) -> list[OrgOut]:
         await orgs_service.to_out(session, org, role)
         for org, role in await orgs_service.list_mine(session, auth.user)
     ]
-
-
-@router.get("/lookup", response_model=RegistryLookupOut, summary="Найти организацию по ИНН")
-async def lookup(inn: str, _auth: AuthDep, registry: RegistryDep) -> RegistryLookupOut:
-    return await orgs_service.lookup(registry, inn)
 
 
 @router.get("/{org_id}", response_model=OrgOut, summary="Организация")
@@ -129,13 +122,10 @@ async def start_verification(
     body: VerificationStart,
     auth: AuthDep,
     session: SessionDep,
-    registry: RegistryDep,
     notifier: NotifierDep,
     jobs: JobsDep,
 ) -> VerificationOut:
-    request = await verification_service.start(
-        session, auth.user, org_id, body, registry=registry, notifier=notifier
-    )
+    request = await verification_service.start(session, auth.user, org_id, body, notifier=notifier)
     if request.method == VerificationMethod.registry_auto and not request.phone_verified:
         await jobs.enqueue(REQUEST_PHONE, auth.user.id, org_id)
     return verification_service.to_out(request)

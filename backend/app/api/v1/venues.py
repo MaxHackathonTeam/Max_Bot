@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, UploadFile
 
-from app.api.deps import AuthDep, GeoDep, SessionDep, SettingsDep
+from app.api.deps import AuthDep, SessionDep, SettingsDep
 from app.core.errors import AppError
 from app.schemas.venues import MediaOut, VenueIn, VenueOut
 from app.services import media as media_service
@@ -24,8 +24,8 @@ async def search_venues(
 
 
 @router.post("/venues", response_model=VenueOut, status_code=201, summary="Добавить площадку")
-async def create_venue(body: VenueIn, auth: AuthDep, session: SessionDep, geo: GeoDep) -> VenueOut:
-    return await venues_service.create(session, auth.user, body, geo)
+async def create_venue(body: VenueIn, auth: AuthDep, session: SessionDep) -> VenueOut:
+    return await venues_service.create(session, auth.user, body)
 
 
 @router.post("/media", response_model=MediaOut, status_code=201, summary="Загрузить обложку")

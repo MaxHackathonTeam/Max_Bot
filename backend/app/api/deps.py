@@ -13,13 +13,11 @@ from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.jobs import JobQueue
 from app.core.security import decode_access_token
-from app.integrations.dadata.party import PartyRegistry
-from app.integrations.geo import GeoProvider
 from app.models.users import User
 from app.services import users as users_service
 from app.services.notify import Notifier, QueuedNotifier
 
-_bearer = HTTPBearer(auto_error=False, description="JWT из POST /api/v1/auth/max")
+_bearer = HTTPBearer(auto_error=False, description="JWT из POST /api/v1/auth/max или /auth/guest")
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -32,14 +30,8 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 
 
-def get_geo(request: Request) -> GeoProvider | None:
-    geo: GeoProvider | None = getattr(request.app.state, "geo", None)
-    return geo
-
-
 SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
-GeoDep = Annotated[GeoProvider | None, Depends(get_geo)]
 
 
 @dataclass(frozen=True)
@@ -97,13 +89,7 @@ def get_jobs(request: Request) -> JobQueue:
     return jobs
 
 
-def get_registry(request: Request) -> PartyRegistry | None:
-    registry: PartyRegistry | None = getattr(request.app.state, "registry", None)
-    return registry
-
-
 JobsDep = Annotated[JobQueue, Depends(get_jobs)]
-RegistryDep = Annotated[PartyRegistry | None, Depends(get_registry)]
 
 
 def get_notifier(jobs: JobsDep) -> Notifier:

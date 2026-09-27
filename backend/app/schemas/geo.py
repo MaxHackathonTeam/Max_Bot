@@ -13,14 +13,6 @@ class LocalityOut(BaseModel):
     distance_km: float | None = Field(default=None, description="Расстояние от точки запроса")
 
 
-class AddressOut(BaseModel):
-    value: str
-    lat: float | None
-    lon: float | None
-    fias_id: str | None
-    locality_name: str | None
-
-
 class CategoryOut(BaseModel):
     slug: str
     name: str

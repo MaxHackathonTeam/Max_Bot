@@ -21,8 +21,7 @@ from app.integrations.safe_fetch import (
 )
 from app.moderation import rules
 from app.services import media as media_service
-from app.services import moderation as moderation_service
-from app.services.verification import contact_hash_valid, name_similarity, normalize_name
+from app.services.verification import contact_hash_valid, inn_valid
 
 NOW = datetime(2026, 9, 25, 12, tzinfo=UTC)
 
@@ -97,35 +96,24 @@ def test_contacts_field_allows_phone() -> None:
     assert rules.check(_data(contacts="+7 912 345-67-89"), NOW) == []
 
 
-# --- Решение по вердикту LLM (§6 п. 2) -------------------------------------------------
+# --- Баллы подозрительности (§6 п. 2, без LLM) ----------------------------------------
 
 
-def test_decide_llm_matrix() -> None:
-    from app.llm.schemas import ModerationVerdictOut as V
-
-    approve_hi = V(verdict="approve", confidence=0.9)
-    approve_lo = V(verdict="approve", confidence=0.5)
-    reject_hi = V(verdict="reject", confidence=0.95, categories=["spam"])
-    review = V(verdict="review", confidence=0.9)
-    assert moderation_service.decide_llm("community", approve_hi) == "published"
-    assert moderation_service.decide_llm("community", approve_lo) == "pending"
-    assert moderation_service.decide_llm("community", reject_hi) == "rejected"
-    assert moderation_service.decide_llm("community", review) == "pending"
-    assert moderation_service.decide_llm("community", None) == "pending"
-    assert moderation_service.decide_llm("official", approve_lo) == "published"
-    assert moderation_service.decide_llm("official", reject_hi) == "hidden"
-    assert moderation_service.decide_llm("official", None) == "hidden"
+def test_score_clean_event() -> None:
+    points, reasons = rules.score(
+        _data(description="Народные песни в сельском клубе, вход свободный")
+    )
+    assert points == 0 and reasons == []
 
 
-def test_retry_delay_stops_after_six_hours() -> None:
-    delays = []
-    attempt = 0
-    while (delay := moderation_service.retry_delay(attempt)) is not None:
-        delays.append(delay)
-        attempt += 1
-    assert delays[0] == 300
-    assert sum(delays) <= 6 * 3600
-    assert len(delays) >= 3
+def test_score_suspicious_signals() -> None:
+    points, reasons = rules.score(
+        _data(title="КОНЦЕРТ ХОРА ВСЕМ ПРИХОДИТЬ", description="Быстрый заработок!!!")
+    )
+    assert points >= rules.SUSPICIOUS_SCORE
+    assert "название заглавными буквами" in reasons
+    assert "похоже на рекламу" in reasons
+    assert "мало информации о событии" in reasons
 
 
 # --- SSRF-фильтр (§14) ------------------------------------------------------------------
@@ -255,24 +243,19 @@ def test_contact_hash_hex_and_base64() -> None:
     assert not contact_hash_valid(vcf, "", "tok")
 
 
-def test_name_similarity_ignores_legal_form() -> None:
-    from app.integrations.dadata.party import PartyInfo
-
-    party = PartyInfo(
-        inn="7700000000",
-        ogrn=None,
-        kind="LEGAL",
-        status="ACTIVE",
-        name_full='МУНИЦИПАЛЬНОЕ БЮДЖЕТНОЕ УЧРЕЖДЕНИЕ КУЛЬТУРЫ "ДОМ КУЛЬТУРЫ СЕЛА ИВАНОВКА"',
-        name_short='МБУК "ДОМ КУЛЬТУРЫ СЕЛА ИВАНОВКА"',
-        names_plain=(normalize_name("ДОМ КУЛЬТУРЫ СЕЛА ИВАНОВКА"),),
-        address=None,
-        region=None,
-        region_code=None,
-        raw={},
-    )
-    assert name_similarity("Дом культуры села Ивановка", party) >= 0.9
-    assert name_similarity("Ресторан Пушкин", party) < 0.7
+@pytest.mark.parametrize(
+    ("inn", "valid"),
+    [
+        ("7701234560", True),  # юрлицо, 10 знаков
+        ("7701234567", False),
+        ("500100732259", True),  # ИП, 12 знаков
+        ("500100732250", False),
+        ("77012345", False),
+        ("77012345ab", False),
+    ],
+)
+def test_inn_checksum(inn: str, valid: bool) -> None:
+    assert inn_valid(inn) is valid
 
 
 # --- Картинки (§14) ----------------------------------------------------------------------

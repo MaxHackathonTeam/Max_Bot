@@ -4,7 +4,6 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
-from app.integrations.geo import GeoProvider
 from app.models.geo import Locality, Venue
 from app.models.users import User
 from app.schemas.venues import VenueIn, VenueOut
@@ -66,17 +65,20 @@ async def search(
     return [_out(*row) for row in (await session.execute(stmt)).all()]
 
 
-async def create(
-    session: AsyncSession, user: User, body: VenueIn, geo: GeoProvider | None
-) -> VenueOut:
+async def create(session: AsyncSession, user: User, body: VenueIn) -> VenueOut:
     if body.org_id is not None:
         await orgs_service.require_member(session, body.org_id, user)
     locality_id = body.locality_id
+    lat, lon = body.lat, body.lon
     if locality_id is not None:
-        if await session.get(Locality, locality_id) is None:
+        locality = await localities_service.get_out(session, locality_id)
+        if locality is None:
             raise AppError("locality_not_found", "Населённый пункт не найден", status_code=422)
-    else:
-        nearest = await localities_service.nearest(session, body.lat, body.lon, geo, limit=1)
+        if lat is None or lon is None:
+            # Без координат — центр населённого пункта.
+            lat, lon = locality.lat, locality.lon
+    elif lat is not None and lon is not None:
+        nearest = await localities_service.nearest(session, lat, lon, limit=1)
         if not nearest:
             raise AppError(
                 "locality_not_found",
@@ -84,11 +86,17 @@ async def create(
                 status_code=422,
             )
         locality_id = nearest[0].id
+    else:
+        raise AppError(
+            "locality_required",
+            "Укажи населённый пункт или точку на карте",
+            status_code=422,
+        )
     venue = Venue(
         name=body.name.strip(),
         address=body.address,
         locality_id=locality_id,
-        point=wkt_point(body.lat, body.lon),
+        point=wkt_point(lat, lon),
         fias_id=body.fias_id,
         org_id=body.org_id,
         source="user",

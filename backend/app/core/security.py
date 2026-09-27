@@ -131,10 +131,13 @@ def _jwt_secret(settings: Settings) -> str:
 
 
 def create_access_token(
-    user_id: int, settings: Settings, review_role: str | None = None
+    user_id: int,
+    settings: Settings,
+    review_role: str | None = None,
+    ttl: timedelta | None = None,
 ) -> tuple[str, datetime]:
     now = datetime.now(UTC)
-    expires_at = now + timedelta(hours=settings.jwt_ttl_hours)
+    expires_at = now + (ttl or timedelta(hours=settings.jwt_ttl_hours))
     claims: dict[str, Any] = {"sub": str(user_id), "iat": now, "exp": expires_at}
     if review_role:
         claims["review_role"] = review_role

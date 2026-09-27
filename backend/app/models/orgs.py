@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
-    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -47,7 +46,6 @@ class Organization(IdMixin, TimestampMixin, Base):
     verification_method: Mapped[str | None] = mapped_column(String(16))
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     verified_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
-    proculture_org_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
 
@@ -98,7 +96,6 @@ class VerificationRequest(IdMixin, TimestampMixin, Base):
     )
     registry_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     site_check: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    llm_check: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(16))
     decision_reason: Mapped[str | None] = mapped_column(Text)
     decided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))

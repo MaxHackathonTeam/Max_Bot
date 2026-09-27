@@ -35,6 +35,7 @@ P_RADIUS = "rad"  # rad:<km>
 P_ADMIN = (
     "adm"  # adm:e:<event_id>:<approve|reject|hide> | adm:v:<id>:<approve|reject> | adm:r:<org>
 )
+P_WEB_LOGIN = "weblogin"  # weblogin:<code>
 
 INTERESTS_DONE = "done"
 CB_SET_LOCALITY = "set:loc"
@@ -248,3 +249,7 @@ def queue_verification(request_id: int) -> dict[str, Any]:
 
 def open_link(web_app: str, payload: str) -> dict[str, Any]:
     return kb.inline_keyboard([[kb.open_app(texts.EVENT_OPEN_BUTTON, web_app, payload)]])
+
+
+def web_login_confirm(code: str) -> dict[str, Any]:
+    return kb.inline_keyboard([[kb.callback(texts.WEB_LOGIN_BUTTON, f"{P_WEB_LOGIN}:{code}")]])

@@ -113,9 +113,14 @@ class ReportReason(StrEnum):
     other = "other"
 
 
+class UserChannel(StrEnum):
+    max = "max"  # бот или мини-приложение MAX
+    web = "web"  # сайт: гость или вход по коду из бота
+
+
 class ModerationActor(StrEnum):
     rules = "rules"
-    llm = "llm"
+    llm = "llm"  # legacy: решения прежних версий, новых не бывает
     admin = "admin"
 
 
@@ -130,4 +135,4 @@ class AuditActor(StrEnum):
     user = "user"
     admin = "admin"
     system = "system"
-    llm = "llm"
+    llm = "llm"  # legacy: записи прежних версий

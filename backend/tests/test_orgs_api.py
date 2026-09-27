@@ -10,9 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.jobs import CHECK_VERIFICATION, REQUEST_PHONE
-from app.integrations.dadata.party import PartyInfo
 from app.integrations.safe_fetch import FetchedPage, UnsafeUrlError
-from app.llm.runner import LlmRunner
 from app.models.enums import EventStatus, TrustTier
 from app.models.events import Event
 from app.models.orgs import VerificationRequest
@@ -22,34 +20,10 @@ from app.services import verification as verification_service
 from app.services.notify import MemoryNotifier
 from app.services.verification import ContactData
 from tests.factories import make_event, make_locality, random_area
-from tests.helpers import BOT_TOKEN, FakeLlm, login_as
+from tests.helpers import BOT_TOKEN, login_as
 
 ORG_CONSENTS = ("terms", "privacy", "org_pd")
-INN = "7701234567"
-
-
-def _party(name: str = "ДОМ КУЛЬТУРЫ СЕЛА ТЕСТОВО", status: str = "ACTIVE") -> PartyInfo:
-    return PartyInfo(
-        inn=INN,
-        ogrn="1027700000000",
-        kind="LEGAL",
-        status=status,
-        name_full=f'МБУК "{name}"',
-        name_short=f'МБУК "{name}"',
-        names_plain=(verification_service.normalize_name(name),),
-        address="Тестовая область, с. Тестово",
-        region="Тестовая область",
-        region_code=None,
-        raw={"inn": INN},
-    )
-
-
-class FakeRegistry:
-    def __init__(self, party: PartyInfo | None) -> None:
-        self.party = party
-
-    async def find_by_inn(self, inn: str) -> PartyInfo | None:
-        return self.party if self.party and inn == self.party.inn else None
+INN = "7701234560"
 
 
 async def _locality(db_session: AsyncSession) -> int:
@@ -175,17 +149,11 @@ async def test_invite_method_a_verifies(db_client: httpx.AsyncClient) -> None:
 
 
 async def _run_checks(
-    db_app: FastAPI, request_id: int, llm: FakeLlm, fetch: Any, notifier: MemoryNotifier
+    db_app: FastAPI, request_id: int, fetch: Any, notifier: MemoryNotifier
 ) -> VerificationRequest | None:
-    runner = LlmRunner(llm, db_app.state.db, 10**9)
     async with db_app.state.db() as session:
         return await verification_service.run_checks(
-            session,
-            request_id,
-            registry=db_app.state.registry,
-            llm=runner,
-            notifier=notifier,
-            fetch=fetch,
+            session, request_id, notifier=notifier, fetch=fetch
         )
 
 
@@ -197,7 +165,6 @@ def _contact(vcf: str, max_user_id: int) -> ContactData:
 async def test_verification_method_b_full(
     db_app: FastAPI, db_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    db_app.state.registry = FakeRegistry(_party())
     owner, owner_user = await login_as(db_client, consents=ORG_CONSENTS)
     stranger, _ = await login_as(db_client, consents=ORG_CONSENTS)
     locality_id = await _locality(db_session)
@@ -234,8 +201,7 @@ async def test_verification_method_b_full(
     async def page_with_code(site: str) -> FetchedPage:
         return FetchedPage(url=site, status=200, html=f"<p>Дом культуры. {code}</p>")
 
-    llm = FakeLlm('{"belongs": true, "confidence": 0.9, "reason": "сайт ДК"}')
-    checked = await _run_checks(db_app, request["id"], llm, page_with_code, notifier)
+    checked = await _run_checks(db_app, request["id"], page_with_code, notifier)
     assert checked is not None and checked.status == "pending"  # телефон ещё не подтверждён
 
     user = await db_session.get(User, owner_user["id"])
@@ -269,25 +235,25 @@ async def test_verification_method_b_full(
 async def test_verification_b_failures(
     db_app: FastAPI, db_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
-    db_app.state.registry = FakeRegistry(_party(name="СОВСЕМ ДРУГОЕ НАЗВАНИЕ", status="LIQUIDATED"))
     owner, _ = await login_as(db_client, consents=ORG_CONSENTS)
     org = await _create_org(db_client, owner, locality_id=await _locality(db_session))
-    r = await db_client.post(
-        f"/api/v1/orgs/{org['id']}/verification",
-        json={"inn": INN, "site_url": "https://dk.test/"},
+    url = f"/api/v1/orgs/{org['id']}/verification"
+    # ИНН проверяется локально по контрольной цифре — без внешних реестров.
+    bad = await db_client.post(
+        url,
+        json={"inn": INN[:-1] + str((int(INN[-1]) + 1) % 10), "site_url": "https://dk.test/"},
         headers=owner,
     )
+    assert bad.status_code == 422 and bad.json()["error"]["details"]["field"] == "inn"
+    r = await db_client.post(url, json={"inn": INN, "site_url": "https://dk.test/"}, headers=owner)
     request = r.json()
-    registry = next(s for s in request["steps"] if s["code"] == "registry")
-    assert registry["status"] == "failed"
-    assert "не действующая" in registry["message"] and "название" in registry["message"]
 
     notifier = MemoryNotifier()
 
     async def ssrf(site: str) -> FetchedPage:
         raise UnsafeUrlError("Адрес сайта ведёт во внутреннюю сеть")
 
-    checked = await _run_checks(db_app, request["id"], FakeLlm("{}"), ssrf, notifier)
+    checked = await _run_checks(db_app, request["id"], ssrf, notifier)
     assert checked is not None and checked.status == "pending"
     assert checked.site_check is not None and checked.site_check["ok"] is False
     assert notifier.sent and "не пройдена" in notifier.sent[-1][1]

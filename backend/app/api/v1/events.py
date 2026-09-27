@@ -32,6 +32,9 @@ async def list_events(
     ] = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    time_from: Annotated[
+        int | None, Query(ge=0, le=23, description="Начало не раньше этого часа, местное время")
+    ] = None,
     category: Annotated[list[str] | None, Query(description="Можно несколько")] = None,
     free: bool = False,
     price_max: Annotated[int | None, Query(ge=0)] = None,
@@ -61,6 +64,7 @@ async def list_events(
         date_preset=date_preset,
         date_from=date_from,
         date_to=date_to,
+        time_from=time_from,
         categories=category or [],
         free=free,
         price_max=price_max,

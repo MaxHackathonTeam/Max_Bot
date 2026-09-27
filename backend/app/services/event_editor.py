@@ -1,7 +1,8 @@
 """Создание и управление событиями (FR-PUB-1, 3, 4, 5): права, статусы, лимиты, trust_tier.
 
 Переходы: draft → pending → published | rejected; published → cancelled | hidden | archived.
-Официальные события публикуются сразу (постмодерация), события сообщества — после LLM.
+Официальные события публикуются сразу (постмодерация), события сообщества — после проверки
+правилами; подозрительные ждут администратора.
 """
 
 import hashlib
@@ -509,7 +510,7 @@ async def patch(
         return event
     await session.commit()
     if rerun:
-        await jobs.enqueue(MODERATE_EVENT, event.id, 0)
+        await jobs.enqueue(MODERATE_EVENT, event.id)
     return event
 
 
@@ -561,7 +562,7 @@ async def submit(
         diff={"status": [status_before, event.status], "trust_tier": event.trust_tier},
     )
     await session.commit()
-    await jobs.enqueue(MODERATE_EVENT, event.id, 0)
+    await jobs.enqueue(MODERATE_EVENT, event.id)
     if event.status == EventStatus.pending:
         await notifier.send(
             user.id, texts.EVENT_PENDING_REVIEW.format(title=event.title), f"ev_{event.id}"

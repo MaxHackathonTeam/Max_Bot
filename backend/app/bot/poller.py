@@ -14,7 +14,6 @@ from app.bot.subscriptions import drop_webhooks
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import make_engine, make_sessionmaker
-from app.integrations.geo_factory import build_geo_provider
 from app.integrations.max import client_from_settings
 
 log = structlog.get_logger(__name__)
@@ -55,7 +54,7 @@ async def main() -> None:
         db=make_sessionmaker(engine),
         max=client,
         states=RedisStateStore(redis),
-        geo=build_geo_provider(settings, redis),
+        redis=redis,
     )
     try:
         await drop_webhooks(client)

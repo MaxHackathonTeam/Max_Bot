@@ -35,28 +35,13 @@ class Settings(BaseSettings):
     # Доступ
     jwt_secret: SecretStr | None = None
     jwt_ttl_hours: int = 12
+    # Гостевой вход в вебе без MAX (POST /auth/guest).
+    guest_jwt_ttl_days: int = 30
     init_data_max_age_s: int = 24 * 3600
     admin_max_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
-    # GigaChat
-    gigachat_auth_key: SecretStr | None = None
-    gigachat_scope: str = "GIGACHAT_API_PERS"
-    gigachat_oauth_url: str = ""
-    gigachat_api_url: str = ""
-    gigachat_model: str = "GigaChat"
-    llm_daily_token_budget: int = 200_000
-    # Путь к сертификату НУЦ Минцифры (russian_trusted_root_ca); пусто — системное хранилище.
-    gigachat_ca_bundle: str | None = None
-
-    # Геокодеры и источники
-    dadata_api_key: SecretStr | None = None
-    dadata_secret_key: SecretStr | None = None
-    nominatim_user_agent: str = "afisha-ryadom/1.0"
-    proculture_api_key: SecretStr | None = None
-
     # Режимы
     seed_demo: bool = True
-    offline_mode: bool = False
     dev_auth: bool = False
     review_mode: bool = False
     review_accounts: SecretStr | None = None
