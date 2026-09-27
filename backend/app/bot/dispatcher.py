@@ -14,7 +14,6 @@ from app.bot.notify import BotNotifier
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.db.session import SessionMaker
-from app.integrations.geo import GeoProvider
 from app.integrations.max import MaxClient
 from app.models.enums import ConsentDoc
 from app.models.users import User
@@ -26,7 +25,7 @@ from app.services import localities as localities_service
 from app.services import moderation as moderation_service
 from app.services import orgs as orgs_service
 from app.services import saved as saved_service
-from app.services import search_parse
+from app.services import search_parse, web_login
 from app.services import users as users_service
 from app.services import verification as verification_service
 from app.services.categories import is_known
@@ -68,10 +67,10 @@ class BotContext:
     db: SessionMaker
     max: MaxClient
     states: fsm.StateStore = field(default_factory=fsm.MemoryStateStore)
-    geo: GeoProvider | None = None
     # Сообщения другим пользователям (автору события, владельцу организации).
     notifier: Notifier | None = None
-    llm: Any = None
+    # Redis приложения: коды входа на сайте (services/web_login).
+    redis: Any = None
 
     async def web_app_name(self) -> str | None:
         """Публичное имя бота для кнопки open_app: из env, иначе из GET /me."""
@@ -168,7 +167,7 @@ async def _search_locality(ctx: BotContext, target: _Target, query: str) -> None
         await _send(ctx, target, texts.LOCALITY_TOO_SHORT, keyboards.ask_locality())
         return
     async with ctx.db() as session:
-        found = await localities_service.search(session, query, ctx.geo, LOCALITY_OPTIONS)
+        found = await localities_service.search(session, query, LOCALITY_OPTIONS)
     if not found:
         text = texts.LOCALITY_NOT_FOUND.format(query=query[:64])
         await _send(ctx, target, text, keyboards.ask_locality())
@@ -199,7 +198,7 @@ async def _after_locality(ctx: BotContext, target: _Target, name: str) -> None:
 async def _on_location(ctx: BotContext, target: _Target, lat: float, lon: float) -> None:
     async with ctx.db() as session:
         user = await _user(session, target)
-        found = await localities_service.nearest(session, lat, lon, ctx.geo, limit=1)
+        found = await localities_service.nearest(session, lat, lon, limit=1)
         if found:
             await users_service.set_location(session, user, found[0].id, (lat, lon))
     if not found:
@@ -297,23 +296,23 @@ async def _on_phrase(ctx: BotContext, target: _Target, phrase: str) -> None:
     """FR-CAT-8: распознать фильтры, показать чипсы и применить FTS fallback."""
     async with ctx.db() as session:
         user = await _user(session, target)
-        # Сохраняем понятный ответ для коротких бытовых сообщений; поиск начинается
-        # с явных признаков запроса или при доступном LLM.
-        if ctx.llm is None and not re.search(
-            r"концерт|кино|театр|выставк|музе|спорт|экскурс|бесплатн|пушкин|сегодня|завтра|выходн|афиш",
-            phrase.casefold(),
-        ):
-            await _send(ctx, target, texts.UNKNOWN_TEXT, keyboards.menu_button())
-            return
         if user.locality_id is None:
             await _send(ctx, target, texts.UNKNOWN_TEXT, keyboards.menu_button())
             return
-        parsed = await search_parse.parse(session, phrase, ctx.llm)
+        parsed = await search_parse.parse(session, phrase)
+        # Ни одного признака запроса — это не поиск, а просто сообщение.
+        if parsed.fallback:
+            await _send(ctx, target, texts.UNKNOWN_TEXT, keyboards.menu_button())
+            return
         filters = events_service.EventFilters(
             locality_id=parsed.locality_id or user.locality_id,
             radius_km=user.radius_km,
             date_preset=cast(events_service.DatePreset | None, parsed.date),
+            date_from=parsed.date_from,
+            date_to=parsed.date_to,
+            time_from=parsed.time_from,
             free=parsed.free,
+            price_max=parsed.price_max,
             pushkin=parsed.pushkin,
             categories=list(parsed.categories),
             q=parsed.q,
@@ -632,6 +631,10 @@ async def _on_admin_reason(ctx: BotContext, target: _Target, state: str, text: s
 
 
 async def _on_start(ctx: BotContext, target: _Target, payload: str | None) -> None:
+    login_code = web_login.code_from_start(payload)
+    if login_code is not None:
+        await _ask_web_login(ctx, target, login_code)
+        return
     async with ctx.db() as session:
         user = await users_service.upsert_from_max(
             session, target.max_user, dialog_chat_id=target.chat_id, bot_started=True
@@ -657,6 +660,32 @@ async def _on_start(ctx: BotContext, target: _Target, payload: str | None) -> No
     await _send(ctx, target, greeting)
     await _send_consent(ctx, target)
     await _send_menu(ctx, target)
+
+
+async def _ask_web_login(ctx: BotContext, target: _Target, code: str) -> None:
+    async with ctx.db() as session:
+        await users_service.upsert_from_max(
+            session, target.max_user, dialog_chat_id=target.chat_id, bot_started=True
+        )
+    if ctx.redis is None:
+        await _send(ctx, target, texts.WEB_LOGIN_UNAVAILABLE, keyboards.menu_button())
+        return
+    await _send(
+        ctx, target, texts.WEB_LOGIN_CONFIRM.format(code=code), keyboards.web_login_confirm(code)
+    )
+
+
+async def _confirm_web_login(ctx: BotContext, target: _Target, code: str, answer: Answer) -> None:
+    confirmed = False
+    if ctx.redis is not None:
+        async with ctx.db() as session:
+            user = await _user(session, target)
+            confirmed = await web_login.confirm(session, ctx.redis, code, user)
+    if confirmed:
+        await answer(texts.WEB_LOGIN_DONE_TOAST)
+    else:
+        await answer()
+        await _send(ctx, target, texts.WEB_LOGIN_EXPIRED, keyboards.menu_button())
 
 
 def _location_of(body: dict[str, Any]) -> tuple[float, float] | None:
@@ -729,7 +758,7 @@ async def _on_message(ctx: BotContext, target: _Target, update: dict[str, Any]) 
     ):
         async with ctx.db() as session:
             user = await _user(session, target)
-            event = await drafts_service.create_from_text(session, user, text, None, ctx.llm)
+            event = await drafts_service.create_from_text(session, user, text, None)
         web_app = await ctx.web_app_name()
         await _send(
             ctx,
@@ -836,6 +865,12 @@ async def _on_callback(
             if exc.code != "invalid_cursor":
                 raise
             await _send(ctx, target, texts.FEED_EXPIRED_TOAST, keyboards.menu_button())
+    elif (
+        prefix == keyboards.P_WEB_LOGIN
+        and len(args) == 1
+        and (code := web_login.normalize(args[0])) is not None
+    ):
+        await _confirm_web_login(ctx, target, code, answer)
     elif prefix == keyboards.P_SAVE and (ids := _two_ints(args)) is not None:
         await _save(ctx, target, *ids, answer)
     elif prefix == keyboards.P_UNSAVE and (ids := _two_ints(args)) is not None:

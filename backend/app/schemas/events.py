@@ -63,7 +63,7 @@ class EventPage(BaseModel):
 
 
 class SourceInfo(BaseModel):
-    code: Literal["organizer", "community", "proculture", "demo"]
+    code: Literal["organizer", "community", "demo"]
     label: str
     url: str | None
     updated_at: datetime

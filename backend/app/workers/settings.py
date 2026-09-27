@@ -17,19 +17,13 @@ from app.core.config import get_settings
 from app.core.jobs import ArqJobQueue
 from app.core.logging import configure_logging
 from app.db.session import make_engine, make_sessionmaker
-from app.integrations.dadata.party import DadataPartyRegistry
-from app.integrations.geo_factory import build_geo_provider
-from app.integrations.gigachat.client import gigachat_from_settings
 from app.integrations.max import client_from_settings
-from app.llm.runner import LlmRunner
 from app.models.events import Event, EventSession, SavedSession
 from app.models.orgs import Organization
 from app.models.users import User
 from app.services import moderation as moderation_service
 from app.services import notifications as notifications_service
 from app.services import verification as verification_service
-from app.sources.importer import run_import
-from app.sources.proculture import ProCultureSource
 
 _settings = get_settings()
 configure_logging(_settings.log_level)
@@ -57,16 +51,10 @@ async def process_bot_update(ctx: dict[str, Any], update: dict[str, Any]) -> Non
     await handle_update(bot, update)
 
 
-async def moderate_event(ctx: dict[str, Any], event_id: int, attempt: int = 0) -> str | None:
+async def moderate_event(ctx: dict[str, Any], event_id: int, _attempt: int = 0) -> str | None:
+    """`_attempt` — для задач, поставленных прежними версиями в очередь; не используется."""
     async with ctx["db"]() as session:
-        return await moderation_service.moderate_event(
-            session,
-            event_id,
-            llm=ctx["llm"],
-            notifier=_notifier(ctx),
-            jobs=ctx["jobs"],
-            attempt=attempt,
-        )
+        return await moderation_service.moderate_event(session, event_id, notifier=_notifier(ctx))
 
 
 async def check_verification(ctx: dict[str, Any], request_id: int) -> str | None:
@@ -74,8 +62,6 @@ async def check_verification(ctx: dict[str, Any], request_id: int) -> str | None
         request = await verification_service.run_checks(
             session,
             request_id,
-            registry=ctx.get("registry"),
-            llm=ctx["llm"],
             notifier=_notifier(ctx),
         )
     return request.status if request is not None else None
@@ -201,18 +187,6 @@ async def schedule_digest(ctx: dict[str, Any]) -> str:
     return str(count)
 
 
-async def import_proculture(ctx: dict[str, Any]) -> str:
-    source = ProCultureSource(
-        _settings.proculture_api_key.get_secret_value() if _settings.proculture_api_key else None
-    )
-    try:
-        async with ctx["db"]() as session:
-            result = await run_import(session, source, [], ctx.get("llm"))
-        return str(result)
-    finally:
-        await source.aclose()
-
-
 def _notifier(ctx: dict[str, Any]) -> Any:
     notifier = ctx.get("notifier")
     if notifier is None:
@@ -234,11 +208,6 @@ async def startup(ctx: dict[str, Any]) -> None:
     db = make_sessionmaker(engine)
     ctx["db"] = db
     ctx["jobs"] = ArqJobQueue(_settings.redis_url)
-    gigachat = gigachat_from_settings(_settings, redis)
-    ctx["gigachat"] = gigachat
-    ctx["llm"] = LlmRunner(gigachat, db, _settings.llm_daily_token_budget)
-    if _settings.dadata_api_key is not None and not _settings.offline_mode:
-        ctx["registry"] = DadataPartyRegistry(_settings.dadata_api_key.get_secret_value())
     client = client_from_settings(_settings)
     if client is not None:
         notifier = BotNotifier(db, client, _settings.max_bot_username)
@@ -248,9 +217,8 @@ async def startup(ctx: dict[str, Any]) -> None:
             db=db,
             max=client,
             states=RedisStateStore(redis),
-            geo=build_geo_provider(_settings, redis),
+            redis=redis,
             notifier=notifier,
-            llm=ctx["llm"],
         )
 
 
@@ -258,9 +226,6 @@ async def shutdown(ctx: dict[str, Any]) -> None:
     bot: BotContext | None = ctx.get("bot")
     if bot is not None:
         await bot.max.aclose()
-    for key in ("gigachat", "registry"):
-        if ctx.get(key) is not None:
-            await ctx[key].aclose()
     await ctx["jobs"].close()
     await ctx["app_redis"].aclose()
     await ctx["engine"].dispose()
@@ -277,7 +242,6 @@ class WorkerSettings:
         schedule_reminders,
         deliver_notifications,
         schedule_digest,
-        import_proculture,
     ]
     on_startup = startup
     on_shutdown = shutdown
@@ -287,5 +251,4 @@ class WorkerSettings:
         cron(schedule_reminders, minute={0, 15, 30, 45}),
         cron(deliver_notifications, minute=set(range(60))),
         cron(schedule_digest, weekday={3}, hour={18}, minute={0}),
-        cron(import_proculture, hour={0, 6, 12, 18}, minute={0}),
     ]

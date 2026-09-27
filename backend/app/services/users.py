@@ -3,14 +3,15 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, literal, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.models.engagement import Notification, Subscription
-from app.models.enums import AuditActor, ConsentDoc, NotificationStatus
-from app.models.events import EventDraft, SavedSession
+from app.models.enums import AuditActor, ConsentDoc, NotificationStatus, UserChannel
+from app.models.events import Event, EventDraft, SavedSession
 from app.models.geo import Locality
 from app.models.users import Consent, User
 from app.schemas.users import ConsentState, MeOut, MeUpdate
@@ -104,6 +105,97 @@ async def upsert_from_max(
             )
     await session.commit()
     return user
+
+
+async def create_guest(session: AsyncSession) -> User:
+    """Гость сайта: без MAX-идентификатора, данные пишет так же, как пользователь MAX."""
+    user = User(channel=UserChannel.web, last_seen_at=datetime.now(UTC))
+    session.add(user)
+    await session.flush()
+    await audit.record(
+        session,
+        action="user.create",
+        entity_type="user",
+        entity_id=user.id,
+        actor_type=AuditActor.system,
+        diff={"source": "web_guest"},
+    )
+    await session.commit()
+    return user
+
+
+_MERGED_PROFILE = ("locality_id", "home_point", "birth_year")
+
+
+async def merge_guest(session: AsyncSession, guest: User, target: User) -> None:
+    """Перенос данных гостя в MAX-аккаунт после входа по коду. Коммит — у вызывающего.
+
+    «Пойду», согласия, события и черновики переходят к target (дубли пропускаются);
+    пустые поля профиля target заполняются из гостя; гость помечается удалённым.
+    """
+    if guest.max_user_id is not None or guest.id == target.id or guest.deleted_at is not None:
+        return
+    saved = await session.execute(
+        insert(SavedSession)
+        .from_select(
+            ["user_id", "session_id"],
+            select(literal(target.id), SavedSession.session_id).where(
+                SavedSession.user_id == guest.id
+            ),
+        )
+        .on_conflict_do_nothing(index_elements=["user_id", "session_id"])
+    )
+    consents = await session.execute(
+        insert(Consent)
+        .from_select(
+            ["user_id", "doc", "version", "accepted_at"],
+            select(literal(target.id), Consent.doc, Consent.version, Consent.accepted_at).where(
+                Consent.user_id == guest.id
+            ),
+        )
+        .on_conflict_do_nothing(index_elements=["user_id", "doc", "version"])
+    )
+    await session.execute(
+        insert(Subscription)
+        .from_select(
+            ["user_id", "kind", "org_id"],
+            select(literal(target.id), Subscription.kind, Subscription.org_id).where(
+                Subscription.user_id == guest.id
+            ),
+        )
+        .on_conflict_do_nothing()
+    )
+    events = await session.execute(
+        update(Event).where(Event.author_user_id == guest.id).values(author_user_id=target.id)
+    )
+    await session.execute(
+        update(EventDraft).where(EventDraft.user_id == guest.id).values(user_id=target.id)
+    )
+    profile: list[str] = []
+    for name in _MERGED_PROFILE:
+        if getattr(target, name) is None and getattr(guest, name) is not None:
+            setattr(target, name, getattr(guest, name))
+            profile.append(name)
+    if not target.interests and guest.interests:
+        target.interests = list(guest.interests)
+        profile.append("interests")
+    await session.execute(delete(SavedSession).where(SavedSession.user_id == guest.id))
+    guest.deleted_at = datetime.now(UTC)
+    await audit.record(
+        session,
+        action="user.merge_guest",
+        entity_type="user",
+        entity_id=target.id,
+        actor_user_id=target.id,
+        diff={
+            "guest_user_id": guest.id,
+            "saved": getattr(saved, "rowcount", None),
+            "consents": getattr(consents, "rowcount", None),
+            "events": getattr(events, "rowcount", None),
+            # Координаты — ПДн: в журнал только имена полей.
+            "profile": profile,
+        },
+    )
 
 
 async def _accepted(session: AsyncSession, user_id: int) -> dict[tuple[str, str], datetime]:
@@ -269,6 +361,7 @@ async def to_me_out(
     return MeOut(
         id=user.id,
         max_user_id=user.max_user_id,
+        channel="web" if user.channel == UserChannel.web else "max",
         first_name=user.first_name,
         last_name=user.last_name,
         username=user.username,

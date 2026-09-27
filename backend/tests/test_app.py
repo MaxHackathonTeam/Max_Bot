@@ -104,10 +104,8 @@ def test_prod_with_dev_auth_refuses_to_start() -> None:
 def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ADMIN_MAX_USER_IDS", "1, 2,3")
     monkeypatch.setenv("MAX_BOT_TOKEN", "")
-    monkeypatch.setenv("OFFLINE_MODE", "1")
     monkeypatch.setenv("DEV_AUTH", "")
     s = Settings(_env_file=None)
     assert s.admin_max_user_ids == [1, 2, 3]
     assert s.max_bot_token is None
-    assert s.offline_mode is True
     assert s.dev_auth is False

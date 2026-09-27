@@ -176,6 +176,107 @@
         }
       }
     },
+    "/api/v1/auth/guest": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Гостевой вход на сайте без MAX",
+        "operationId": "auth_guest_api_v1_auth_guest_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/web-code": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Код для входа на сайте через MAX",
+        "operationId": "web_code_api_v1_auth_web_code_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebCodeOut"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/web-code/poll": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Проверить, подтверждён ли код в боте",
+        "operationId": "web_code_poll_api_v1_auth_web_code_poll_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebCodePollIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenOut"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Код ещё не подтверждён",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebCodePending"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Код истёк или уже использован"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/me": {
       "get": {
         "tags": [
@@ -423,57 +524,6 @@
         }
       }
     },
-    "/api/v1/admin/imports/{source}/run": {
-      "post": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "Запустить импорт источника",
-        "operationId": "run_api_v1_admin_imports__source__run_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "source",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Source"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "integer"
-                  },
-                  "title": "Response Run Api V1 Admin Imports  Source  Run Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/categories": {
       "get": {
         "tags": [
@@ -506,11 +556,6 @@
         ],
         "summary": "Поиск населённого пункта",
         "operationId": "search_localities_api_v1_localities_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
         "parameters": [
           {
             "name": "q",
@@ -571,11 +616,6 @@
         ],
         "summary": "Ближайшие населённые пункты к точке",
         "operationId": "nearest_localities_api_v1_localities_nearest_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
         "parameters": [
           {
             "name": "lat",
@@ -665,71 +705,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LocalityOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/geo/suggest": {
-      "get": {
-        "tags": [
-          "geo"
-        ],
-        "summary": "Подсказки адресов",
-        "operationId": "suggest_addresses_api_v1_geo_suggest_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "q",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 3,
-              "maxLength": 200,
-              "title": "Q"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 10,
-              "minimum": 1,
-              "default": 5,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AddressOut"
-                  },
-                  "title": "Response Suggest Addresses Api V1 Geo Suggest Get"
                 }
               }
             }
@@ -878,6 +853,26 @@
               ],
               "title": "Date To"
             }
+          },
+          {
+            "name": "time_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 23,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Начало не раньше этого часа, местное время",
+              "title": "Time From"
+            },
+            "description": "Начало не раньше этого часа, местное время"
           },
           {
             "name": "category",
@@ -1755,53 +1750,6 @@
         ]
       }
     },
-    "/api/v1/orgs/lookup": {
-      "get": {
-        "tags": [
-          "orgs"
-        ],
-        "summary": "Найти организацию по ИНН",
-        "operationId": "lookup_api_v1_orgs_lookup_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "inn",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Inn"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RegistryLookupOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/orgs/{org_id}": {
       "get": {
         "tags": [
@@ -2339,7 +2287,7 @@
         "tags": [
           "search"
         ],
-        "summary": "Фраза → фильтры, fallback на FTS",
+        "summary": "Фраза → фильтры по правилам, остаток — в полнотекстовый поиск. Без авторизации",
         "operationId": "parse_phrase_api_v1_search_parse_post",
         "requestBody": {
           "content": {
@@ -2372,12 +2320,7 @@
               }
             }
           }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
+        }
       }
     },
     "/api/v1/drafts/from-text": {
@@ -3111,67 +3054,6 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Accessibility"
-      },
-      "AddressOut": {
-        "properties": {
-          "value": {
-            "type": "string",
-            "title": "Value"
-          },
-          "lat": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Lat"
-          },
-          "lon": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Lon"
-          },
-          "fias_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fias Id"
-          },
-          "locality_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Locality Name"
-          }
-        },
-        "type": "object",
-        "required": [
-          "value",
-          "lat",
-          "lon",
-          "fias_id",
-          "locality_name"
-        ],
-        "title": "AddressOut"
       },
       "AuditItem": {
         "properties": {
@@ -5186,6 +5068,15 @@
             ],
             "title": "Max User Id"
           },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "max",
+              "web"
+            ],
+            "title": "Channel",
+            "description": "web — гость сайта без MAX"
+          },
           "first_name": {
             "anyOf": [
               {
@@ -5296,6 +5187,7 @@
         "required": [
           "id",
           "max_user_id",
+          "channel",
           "first_name",
           "last_name",
           "username",
@@ -6097,10 +5989,56 @@
             ],
             "title": "Date"
           },
+          "date_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date From"
+          },
+          "date_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date To"
+          },
+          "time_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time From"
+          },
           "free": {
             "type": "boolean",
             "title": "Free",
             "default": false
+          },
+          "price_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Max"
           },
           "pushkin": {
             "type": "boolean",
@@ -6369,95 +6307,6 @@
         ],
         "title": "QueueVerification"
       },
-      "RegistryLookupOut": {
-        "properties": {
-          "found": {
-            "type": "boolean",
-            "title": "Found"
-          },
-          "inn": {
-            "type": "string",
-            "title": "Inn"
-          },
-          "ogrn": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ogrn"
-          },
-          "name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Name"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status"
-          },
-          "address": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Address"
-          },
-          "region": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Region"
-          },
-          "kind": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "legal",
-                  "individual"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Kind"
-          }
-        },
-        "type": "object",
-        "required": [
-          "found",
-          "inn"
-        ],
-        "title": "RegistryLookupOut",
-        "description": "Автозаполнение формы организации из ЕГРЮЛ/ЕГРИП (DaData)."
-      },
       "ReportIn": {
         "properties": {
           "reason": {
@@ -6700,7 +6549,6 @@
             "enum": [
               "organizer",
               "community",
-              "proculture",
               "demo"
             ],
             "title": "Code"
@@ -6889,15 +6737,29 @@
             "title": "Address"
           },
           "lat": {
-            "type": "number",
-            "maximum": 90.0,
-            "minimum": -90.0,
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 90.0,
+                "minimum": -90.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Lat"
           },
           "lon": {
-            "type": "number",
-            "maximum": 180.0,
-            "minimum": -180.0,
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 180.0,
+                "minimum": -180.0
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Lon"
           },
           "org_id": {
@@ -6922,7 +6784,7 @@
               }
             ],
             "title": "Locality Id",
-            "description": "По умолчанию — ближайший к точке населённый пункт"
+            "description": "По умолчанию — ближайший к точке населённый пункт; без координат обязателен, площадка ставится в центр населённого пункта"
           },
           "fias_id": {
             "anyOf": [
@@ -6940,9 +6802,7 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "name",
-          "lat",
-          "lon"
+          "name"
         ],
         "title": "VenueIn"
       },
@@ -7214,7 +7074,6 @@
               "registry",
               "phone",
               "site_code",
-              "page_check",
               "admin"
             ],
             "title": "Code"
@@ -7252,12 +7111,64 @@
           "status"
         ],
         "title": "VerificationStep"
+      },
+      "WebCodeOut": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "description": "Код из 6 символов, живёт expires_in секунд, одноразовый"
+          },
+          "deeplink": {
+            "type": "string",
+            "title": "Deeplink",
+            "description": "https://max.ru/<бот>?start=login_<код>"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "deeplink",
+          "expires_in"
+        ],
+        "title": "WebCodeOut"
+      },
+      "WebCodePending": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "pending",
+            "title": "Status",
+            "default": "pending"
+          }
+        },
+        "type": "object",
+        "title": "WebCodePending"
+      },
+      "WebCodePollIn": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "WebCodePollIn"
       }
     },
     "securitySchemes": {
       "HTTPBearer": {
         "type": "http",
-        "description": "JWT из POST /api/v1/auth/max",
+        "description": "JWT из POST /api/v1/auth/max или /auth/guest",
         "scheme": "bearer"
       }
     }

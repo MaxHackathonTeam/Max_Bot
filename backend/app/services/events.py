@@ -63,7 +63,6 @@ PUBLIC_STATUSES = (EventStatus.published, EventStatus.cancelled, EventStatus.arc
 _SOURCE_LABELS = {
     "organizer": "Организатор",
     "community": "Житель, от сообщества",
-    "proculture": "PRO.Культура.РФ",
     "demo": "Демо-данные",
 }
 
@@ -77,6 +76,8 @@ class EventFilters:
     date_preset: DatePreset | None = None
     date_from: date | None = None
     date_to: date | None = None
+    # Час начала «не раньше» в часовом поясе точки поиска («после 18»).
+    time_from: int | None = None
     categories: list[str] = field(default_factory=list)
     free: bool = False
     price_max: int | None = None
@@ -227,6 +228,10 @@ async def search(
     ]
     if range_end is not None:
         session_conds.append(EventSession.starts_at < range_end)
+    if filters.time_from is not None:
+        tz_name = origin.timezone if origin else DEFAULT_TIMEZONE
+        local_start = func.timezone(tz_name, EventSession.starts_at)
+        session_conds.append(func.extract("hour", local_start) >= filters.time_from)
     next_session = (
         select(
             EventSession.id.label("id"),
@@ -485,8 +490,6 @@ async def _source_info(session: AsyncSession, event: Event) -> SourceInfo:
     )
     if event.trust_tier == TrustTier.demo or (source is not None and source.source == "demo"):
         code = "demo"
-    elif source is not None and source.source == "proculture":
-        code = "proculture"
     elif event.trust_tier == TrustTier.community:
         code = "community"
     else:

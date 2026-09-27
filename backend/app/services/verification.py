@@ -1,13 +1,12 @@
-"""Верификация организации (§5.3): B — реестр, телефон, код на сайте, LLM; C — админ.
+"""Верификация организации (§5.3): B — ИНН, телефон, код на сайте; C — админ.
 
-Способ A (приглашение) — в services.orgs.accept_invite.
+Способ A (приглашение) — в services.orgs.accept_invite. Внешних реестров нет: ИНН проверяется
+локально (формат и контрольная сумма), принадлежность сайта — кодом на странице.
 """
 
 import base64
-import difflib
 import hashlib
 import hmac
-import re
 import secrets
 import string
 from collections.abc import Awaitable, Callable
@@ -22,12 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot import texts
 from app.core.errors import AppError
 from app.core.jobs import CHECK_VERIFICATION, JobQueue
-from app.integrations.dadata.party import PartyInfo, PartyRegistry
 from app.integrations.safe_fetch import FetchedPage, FetchError, UnsafeUrlError, fetch_page
-from app.llm.runner import LlmRunner
-from app.llm.schemas import PageCheckOut
 from app.models.enums import AuditActor, VerificationMethod, VerificationStatus
-from app.models.geo import Locality
 from app.models.orgs import Organization, VerificationRequest
 from app.models.users import User
 from app.schemas.orgs import VerificationOut, VerificationStart, VerificationStep
@@ -39,21 +34,8 @@ from app.services.notify import Notifier
 log = structlog.get_logger(__name__)
 
 RETRY_INTERVAL = timedelta(minutes=10)
-NAME_SIMILARITY_MIN = 0.7
-PAGE_CONFIDENCE_MIN = 0.7
-PAGE_TEXT_LIMIT = 6000
 CODE_PREFIX = "AFISHA-"
 _CODE_ALPHABET = string.ascii_uppercase + string.digits
-
-# Организационно-правовые формы и служебные слова, не влияющие на сходство названий.
-_OPF_WORDS = frozenset(
-    """ооо оао пао зао ао ип нко ано ано мбу мбук мку мкук мау мбоу мбудо гбу гбук гау гаук
-    фгбу фгбук фгбоу оо роо моо тос нп чу учреждение муниципальное государственное бюджетное
-    казенное казённое автономное областное краевое районное городское сельское
-    общество ограниченной ответственностью индивидуальный предприниматель культуры
-    некоммерческая организация""".split()
-)
-_NON_WORD = re.compile(r"[^\w\s]+")
 
 Fetch = Callable[[str], Awaitable[FetchedPage]]
 
@@ -62,86 +44,46 @@ def new_code() -> str:
     return CODE_PREFIX + "".join(secrets.choice(_CODE_ALPHABET) for _ in range(6))
 
 
-def normalize_name(name: str) -> str:
-    cleaned = _NON_WORD.sub(" ", name.lower().replace("ё", "е"))
-    return " ".join(w for w in cleaned.split() if w not in _OPF_WORDS)
+# --- Шаг 1: ИНН ------------------------------------------------------------------------
+
+_INN10_WEIGHTS = (2, 4, 10, 3, 5, 9, 4, 6, 8)
+_INN12_WEIGHTS_1 = (7, 2, 4, 10, 3, 5, 9, 4, 6, 8)
+_INN12_WEIGHTS_2 = (3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8)
 
 
-def name_similarity(entered: str, party: PartyInfo) -> float:
-    target = normalize_name(entered)
-    candidates = {
-        normalize_name(n) for n in (*party.names_plain, party.name_full, party.name_short) if n
-    }
-    return max(
-        (difflib.SequenceMatcher(None, target, c).ratio() for c in candidates if c),
-        default=0.0,
+def _control(digits: list[int], weights: tuple[int, ...]) -> int:
+    return sum(d * w for d, w in zip(digits, weights, strict=False)) % 11 % 10
+
+
+def inn_valid(inn: str) -> bool:
+    """Контрольные цифры ИНН: 10 знаков — юрлицо, 12 — ИП и физлицо."""
+    if not inn.isdigit() or len(inn) not in (10, 12):
+        return False
+    d = [int(c) for c in inn]
+    if len(d) == 10:
+        return _control(d, _INN10_WEIGHTS) == d[9]
+    return _control(d, _INN12_WEIGHTS_1) == d[10] and _control(d, _INN12_WEIGHTS_2) == d[11]
+
+
+def _bad_inn() -> AppError:
+    return AppError(
+        "validation_error",
+        "ИНН с ошибкой: не сходится контрольная цифра",
+        status_code=422,
+        details={"field": "inn"},
     )
 
 
-# --- Шаг 1: реестр ---------------------------------------------------------------------
-
-
-async def _region_matches(session: AsyncSession, org: Organization, party: PartyInfo) -> bool:
-    if org.locality_id is None:
-        return False
-    locality = await session.get(Locality, org.locality_id)
-    if locality is None:
-        return False
-    if locality.region_code and party.region_code:
-        return locality.region_code == party.region_code
-    if locality.region and party.region:
-        return normalize_name(locality.region) == normalize_name(party.region)
-    return False
-
-
-async def check_registry(
-    session: AsyncSession, org: Organization, inn: str, registry: PartyRegistry | None
-) -> dict[str, Any]:
-    """Снимок для registry_snapshot: {ok, message, ...данные реестра}."""
-    checked_at = utcnow().isoformat()
-    if registry is None:
-        return {"ok": None, "message": "Реестр сейчас недоступен, повтори позже", "at": checked_at}
-    try:
-        party = await registry.find_by_inn(inn)
-    except Exception as exc:
-        log.warning("verification_registry_failed", error=type(exc).__name__)
-        return {"ok": None, "message": "Реестр сейчас недоступен, повтори позже", "at": checked_at}
-    if party is None:
-        return {"ok": False, "message": f"ИНН {inn} не найден в ЕГРЮЛ/ЕГРИП", "at": checked_at}
-    similarity = round(name_similarity(org.name, party), 3)
-    region_ok = await _region_matches(session, org, party)
-    snapshot: dict[str, Any] = {
-        "at": checked_at,
-        "inn": party.inn,
-        "ogrn": party.ogrn,
-        "type": party.kind,
-        "status": party.status,
-        "name": party.display_name,
-        "region": party.region,
-        "region_code": party.region_code,
-        "name_similarity": similarity,
-        "region_match": region_ok,
-        "raw": party.raw,
+def check_inn(inn: str) -> dict[str, Any]:
+    """Снимок для registry_snapshot: {ok, message, at, inn, type}."""
+    ok = inn_valid(inn)
+    return {
+        "ok": ok,
+        "at": utcnow().isoformat(),
+        "inn": inn,
+        "type": "LEGAL" if len(inn) == 10 else "INDIVIDUAL",
+        "message": "ИНН корректен" if ok else f"ИНН {inn} с ошибкой: не сходится контрольная цифра",
     }
-    problems = []
-    if party.status != "ACTIVE":
-        problems.append("организация в реестре не действующая")
-    if similarity < NAME_SIMILARITY_MIN:
-        problems.append(f"название не совпадает с реестром («{party.display_name}»)")
-    if org.locality_id is None:
-        problems.append("укажи населённый пункт организации")
-    elif not region_ok:
-        problems.append("регион в реестре не совпадает с регионом организации")
-    snapshot["ok"] = not problems
-    snapshot["message"] = "; ".join(problems) if problems else "Найдена в реестре, действующая"
-    return snapshot
-
-
-def apply_registry(org: Organization, snapshot: dict[str, Any]) -> None:
-    if snapshot.get("ok"):
-        org.ogrn = snapshot.get("ogrn")
-        org.registry_name = snapshot.get("name")
-        org.registry_status = snapshot.get("status")
 
 
 # --- Шаг 2: телефон (request_contact) ----------------------------------------------------
@@ -225,7 +167,7 @@ async def confirm_phone(
     return "ok"
 
 
-# --- Шаги 3–4: код на сайте и LLM-проверка страницы ---------------------------------------
+# --- Шаг 3: код на сайте -----------------------------------------------------------
 
 
 def _all_ok(request: VerificationRequest) -> bool:
@@ -233,7 +175,6 @@ def _all_ok(request: VerificationRequest) -> bool:
         (request.registry_snapshot or {}).get("ok")
         and request.phone_verified
         and (request.site_check or {}).get("ok")
-        and (request.llm_check or {}).get("ok")
     )
 
 
@@ -270,73 +211,28 @@ async def _notify_done(notifier: Notifier, request: VerificationRequest, org: Or
     )
 
 
-async def check_site(request: VerificationRequest, fetch: Fetch) -> tuple[dict[str, Any], str]:
-    """Код на странице; возвращает (site_check, текст страницы для LLM)."""
+async def check_site(request: VerificationRequest, fetch: Fetch) -> dict[str, Any]:
+    """Код на странице: точное вхождение в HTML или текст."""
     at = utcnow().isoformat()
     if not request.site_url or not request.code:
-        return {"ok": False, "message": "Не указана ссылка на сайт", "at": at}, ""
+        return {"ok": False, "message": "Не указана ссылка на сайт", "at": at}
     try:
         page = await fetch(request.site_url)
-    except UnsafeUrlError as exc:
-        return {"ok": False, "message": str(exc), "at": at}, ""
-    except FetchError as exc:
-        return {"ok": False, "message": str(exc), "at": at}, ""
-    text = page.text
-    found = request.code in page.html or request.code in text
+    except (UnsafeUrlError, FetchError) as exc:
+        return {"ok": False, "message": str(exc), "at": at}
+    found = request.code in page.html or request.code in page.text
     message = "Код найден" if found else f"Код {request.code} на странице не найден"
-    return {"ok": found, "message": message, "at": at, "final_url": page.url}, text
-
-
-async def check_page(
-    llm: LlmRunner, org: Organization, request: VerificationRequest, page_text: str
-) -> dict[str, Any]:
-    at = utcnow().isoformat()
-    result = await llm.run_json(
-        "verification_page",
-        "org_page_check",
-        PageCheckOut,
-        org_name=org.name,
-        registry_name=org.registry_name or (request.registry_snapshot or {}).get("name"),
-        url=request.site_url,
-        page_text=page_text[:PAGE_TEXT_LIMIT],
-    )
-    base = {"at": at, "prompt_version": result.prompt_version, "model": result.model}
-    if result.status == "unavailable":
-        return {
-            **base,
-            "ok": None,
-            "message": "Автопроверка страницы недоступна — заявку посмотрит администратор",
-        }
-    if result.value is None:
-        return {
-            **base,
-            "ok": None,
-            "message": "Автопроверка не дала ответа — заявку посмотрит администратор",
-        }
-    value = result.value
-    ok = value.belongs and value.confidence >= PAGE_CONFIDENCE_MIN
-    return {
-        **base,
-        "ok": ok,
-        "belongs": value.belongs,
-        "confidence": value.confidence,
-        "reason": value.reason,
-        "message": "Страница относится к организации"
-        if ok
-        else "Не похоже, что страница принадлежит этой организации",
-    }
+    return {"ok": found, "message": message, "at": at, "final_url": page.url}
 
 
 async def run_checks(
     session: AsyncSession,
     request_id: int,
     *,
-    registry: PartyRegistry | None,
-    llm: LlmRunner,
     notifier: Notifier,
     fetch: Fetch = fetch_page,
 ) -> VerificationRequest | None:
-    """Задача воркера: всё, что ещё не пройдено. Реестр — повторно, если не прошёл."""
+    """Задача воркера: проверить код на сайте и завершить заявку, если всё пройдено."""
     request = await session.get(VerificationRequest, request_id)
     if request is None or request.status != VerificationStatus.pending:
         return request
@@ -346,31 +242,16 @@ async def run_checks(
     if org is None:
         return request
 
-    before = {
-        "registry": (request.registry_snapshot or {}).get("ok"),
-        "site": (request.site_check or {}).get("ok"),
-        "page": (request.llm_check or {}).get("ok"),
-    }
-    if not (request.registry_snapshot or {}).get("ok") and request.inn:
-        snapshot = await check_registry(session, org, request.inn, registry)
-        request.registry_snapshot = snapshot
-        apply_registry(org, snapshot)
-    site_check, page_text = await check_site(request, fetch)
-    request.site_check = site_check
-    if site_check.get("ok"):
-        request.llm_check = await check_page(llm, org, request, page_text)
-    after = {
-        "registry": (request.registry_snapshot or {}).get("ok"),
-        "site": (request.site_check or {}).get("ok"),
-        "page": (request.llm_check or {}).get("ok"),
-    }
+    before = (request.site_check or {}).get("ok")
+    request.site_check = await check_site(request, fetch)
+    after = request.site_check.get("ok")
     await audit.record(
         session,
         action="verification.check",
         entity_type="verification_request",
         entity_id=request.id,
         actor_type=AuditActor.system,
-        diff=audit.changes(before, after),
+        diff=audit.changes({"site": before}, {"site": after}),
     )
     done = await try_finalize(session, request, org)
     await session.commit()
@@ -418,12 +299,10 @@ def steps_of(request: VerificationRequest) -> list[VerificationStep]:
         ]
     registry = request.registry_snapshot or {}
     site = request.site_check or {}
-    page = request.llm_check or {}
-    site_ok = site.get("ok") is True
     return [
         VerificationStep(
             code="registry",
-            title="ИНН в реестре, название и регион",
+            title="ИНН без ошибок",
             status=_step_status(registry.get("ok")),
             message=registry.get("message"),
         ),
@@ -441,12 +320,6 @@ def steps_of(request: VerificationRequest) -> list[VerificationStep]:
             status=_step_status(site.get("ok")),
             message=site.get("message")
             or f"Размести код {request.code} на странице и нажми «Проверить»",
-        ),
-        VerificationStep(
-            code="page_check",
-            title="Страница относится к организации",
-            status=_step_status(page.get("ok")) if site_ok else "skipped",
-            message=page.get("message") if site_ok else None,
         ),
     ]
 
@@ -507,14 +380,15 @@ async def start(
     org_id: int,
     body: VerificationStart,
     *,
-    registry: PartyRegistry | None,
     notifier: Notifier,
 ) -> VerificationRequest:
-    """Подать заявку. Реестр проверяется сразу; телефон — в боте; сайт — по «Проверить»."""
+    """Подать заявку. ИНН проверяется сразу; телефон — в боте; сайт — по «Проверить»."""
     access = await orgs_service.require_owner(session, org_id, user)
     org = access.org
     if orgs_service.is_verified(org):
         raise AppError("already_verified", "Организация уже проверена", status_code=409)
+    if body.inn and not inn_valid(body.inn):
+        raise _bad_inn()
     existing = await _pending(session, org_id)
     if existing is not None:
         if existing.method != body.method:
@@ -528,11 +402,10 @@ async def start(
             changed["site_url"] = [existing.site_url, body.site_url]
             existing.site_url = body.site_url
             existing.site_check = None
-            existing.llm_check = None
         if body.inn and body.inn != existing.inn:
             changed["inn"] = [existing.inn, body.inn]
             existing.inn = body.inn
-            existing.registry_snapshot = None
+            existing.registry_snapshot = check_inn(body.inn)
         if changed:
             await audit.record(
                 session,
@@ -564,14 +437,14 @@ async def start(
                 details={"missing": missing},
             )
         assert inn is not None  # noqa: S101 — проверено выше
+        if not inn_valid(inn):
+            raise _bad_inn()
         request.inn = inn
         request.site_url = site_url
         request.code = new_code()
         if org.inn is None:
             org.inn = inn
-        snapshot = await check_registry(session, org, inn, registry)
-        request.registry_snapshot = snapshot
-        apply_registry(org, snapshot)
+        request.registry_snapshot = check_inn(inn)
     else:
         request.inn = body.inn or org.inn
         request.site_url = body.site_url or org.website

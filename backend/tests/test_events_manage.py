@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.jobs import MODERATE_EVENT
-from app.llm.runner import LlmRunner
 from app.models.enums import EventStatus
 from app.models.events import Event
 from app.models.system import ModerationDecision
@@ -19,7 +18,7 @@ from app.services import moderation
 from app.services.events import utcnow
 from app.services.notify import MemoryNotifier
 from tests.factories import make_locality, make_venue, random_area
-from tests.helpers import FakeLlm, login_as, verdict
+from tests.helpers import login_as
 
 ORG_CONSENTS = ("terms", "privacy", "org_pd")
 
@@ -81,19 +80,12 @@ async def _verified_org(client: httpx.AsyncClient, owner: dict[str, str]) -> int
     return org_id
 
 
-async def _moderate(db_app: FastAPI, event_id: int, llm: FakeLlm) -> str | None:
-    notifier = MemoryNotifier()
+async def _moderate(db_app: FastAPI, event_id: int) -> str | None:
     async with db_app.state.db() as session:
-        return await moderation.moderate_event(
-            session,
-            event_id,
-            llm=LlmRunner(llm, db_app.state.db, 10**9),
-            notifier=notifier,
-            jobs=db_app.state.jobs,
-        )
+        return await moderation.moderate_event(session, event_id, notifier=MemoryNotifier())
 
 
-async def test_community_flow_with_llm(
+async def test_community_flow_by_rules(
     db_app: FastAPI, db_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
     _, venue_id = await _place(db_session)
@@ -120,12 +112,9 @@ async def test_community_flow_with_llm(
     assert [j.args[0] for j in jobs.named(MODERATE_EVENT)] == [event["id"]]
     assert (await db_client.post(f"{url}/submit", headers=author)).status_code == 409
 
-    # LLM недоступен — событие ждёт, задача переставлена с задержкой.
-    assert await _moderate(db_app, event["id"], FakeLlm("", fail=True)) == "pending"
-    retry = jobs.named(MODERATE_EVENT)[-1]
-    assert retry.args == (event["id"], 1) and (retry.defer_s or 0) > 0
-
-    assert await _moderate(db_app, event["id"], FakeLlm(verdict("approve"))) == "published"
+    assert await _moderate(db_app, event["id"]) == "published"
+    # Повторная задача ничего не меняет.
+    assert await _moderate(db_app, event["id"]) is None
     public = await db_client.get(url)
     assert public.status_code == 200 and public.json()["trust_tier"] == "community"
     decisions = await db_session.scalars(
@@ -133,7 +122,7 @@ async def test_community_flow_with_llm(
             ModerationDecision.entity_type == "event", ModerationDecision.entity_id == event["id"]
         )
     )
-    assert "llm" in set(decisions)
+    assert set(decisions) == {"rules"}
 
     mine = (await db_client.get("/api/v1/me/events", headers=author)).json()
     assert [(e["id"], e["status"]) for e in mine] == [(event["id"], "published")]
@@ -143,23 +132,31 @@ async def test_community_flow_with_llm(
     assert r.status_code == 200 and r.json()["status"] == "pending"
 
 
-async def test_llm_reject_notifies(
+async def test_suspicious_waits_for_admin(
     db_app: FastAPI, db_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
     _, venue_id = await _place(db_session)
     author, _ = await login_as(db_client)
-    event = await _create(db_client, author, _body(venue_id))
+    body = _body(venue_id, title="ВЕЧЕР НАРОДНОЙ ПЕСНИ", description="Приходите!!!")
+    event = await _create(db_client, author, body)
     await db_client.post(f"/api/v1/events/{event['id']}/submit", headers=author)
-    answer = verdict("reject", 0.9, "not_event")
-    assert await _moderate(db_app, event["id"], FakeLlm(answer)) == "rejected"
+    # Подозрительное по правилам не публикуется сразу — ждёт администратора с причинами.
+    assert await _moderate(db_app, event["id"]) == "pending"
     manage = (await db_client.get(f"/api/v1/events/{event['id']}/manage", headers=author)).json()
-    assert manage["status"] == "rejected" and manage["moderation_reason"]
-    # Отклонённое можно исправить и отправить снова.
-    await db_client.patch(
-        f"/api/v1/events/{event['id']}", json={"title": "Концерт хора"}, headers=author
-    )
-    r = await db_client.post(f"/api/v1/events/{event['id']}/submit", headers=author)
-    assert r.status_code == 200 and r.json()["status"] == "pending"
+    assert manage["status"] == "pending" and "заглавными" in manage["moderation_reason"]
+
+    admin, _ = await login_as(db_client, 777)
+    queue = (await db_client.get("/api/v1/admin/queue", headers=admin)).json()
+    assert event["id"] in [e["id"] for e in queue["events"]]
+    decision = f"/api/v1/admin/events/{event['id']}/decision"
+    assert (
+        await db_client.post(decision, json={"action": "approve"}, headers=author)
+    ).status_code == 403
+    r = await db_client.post(decision, json={"action": "approve"}, headers=admin)
+    assert r.status_code == 204
+    r = await db_client.post(decision, json={"action": "approve"}, headers=admin)
+    assert r.status_code == 409
+    assert (await db_client.get(f"/api/v1/events/{event['id']}")).status_code == 200
 
 
 async def test_submit_validation(db_client: httpx.AsyncClient, db_session: AsyncSession) -> None:
@@ -232,26 +229,14 @@ async def test_official_flow_and_team(
     assert r.json()["published_at"] is not None
     assert (await db_client.get(f"/api/v1/events/{event['id']}")).json()["pushkin_card"] is True
 
-    # LLM сомневается — official скрывается до решения админа.
-    assert await _moderate(db_app, event["id"], FakeLlm(verdict("review", 0.5))) == "hidden"
+    # Официальное событие правила не скрывают — только фиксируют решение.
+    assert await _moderate(db_app, event["id"]) == "published"
     listed = (
         await db_client.get(
-            f"/api/v1/orgs/{org_id}/events", params={"status": "hidden"}, headers=owner
+            f"/api/v1/orgs/{org_id}/events", params={"status": "published"}, headers=owner
         )
     ).json()
     assert [e["id"] for e in listed] == [event["id"]]
-
-    admin, _ = await login_as(db_client, 777)
-    queue = (await db_client.get("/api/v1/admin/queue", headers=admin)).json()
-    assert event["id"] in [e["id"] for e in queue["events"]]
-    decision = f"/api/v1/admin/events/{event['id']}/decision"
-    assert (
-        await db_client.post(decision, json={"action": "approve"}, headers=owner)
-    ).status_code == 403
-    r = await db_client.post(decision, json={"action": "approve"}, headers=admin)
-    assert r.status_code == 204
-    r = await db_client.post(decision, json={"action": "approve"}, headers=admin)
-    assert r.status_code == 409
 
     r = await db_client.post(f"/api/v1/events/{event['id']}/cancel", headers=owner)
     assert r.status_code == 200 and r.json()["status"] == "cancelled"
@@ -277,7 +262,7 @@ async def test_reports_hide_event(
     author, _ = await login_as(db_client)
     event = await _create(db_client, author, _body(venue_id))
     await db_client.post(f"/api/v1/events/{event['id']}/submit", headers=author)
-    await _moderate(db_app, event["id"], FakeLlm(verdict("approve")))
+    await _moderate(db_app, event["id"])
     url = f"/api/v1/events/{event['id']}/report"
 
     first, _ = await login_as(db_client)

@@ -4,7 +4,7 @@ from app.models.engagement import AnalyticsEvent, Notification, Report, Subscrip
 from app.models.events import Event, EventDraft, EventSession, EventSource, Media, SavedSession
 from app.models.geo import Locality, Venue
 from app.models.orgs import Organization, OrgInvite, OrgMember, VerificationRequest
-from app.models.system import AuditLog, ImportRun, LlmCall, ModerationDecision
+from app.models.system import AuditLog, ModerationDecision
 from app.models.users import Consent, User
 
 __all__ = [
@@ -15,8 +15,6 @@ __all__ = [
     "EventDraft",
     "EventSession",
     "EventSource",
-    "ImportRun",
-    "LlmCall",
     "Locality",
     "Media",
     "ModerationDecision",

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.jobs import MemoryJobQueue
 from app.main import create_app
-from tests.helpers import BOT_TOKEN, JWT_SECRET, WEBHOOK_SECRET
+from tests.helpers import BOT_TOKEN, JWT_SECRET, WEBHOOK_SECRET, FakeRedis
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 APP_ROLE_PASSWORD = "afisha_app_test"
@@ -94,17 +94,17 @@ def db_settings(app_database_url: str, tmp_path: Path) -> Settings:
         jwt_secret=SecretStr(JWT_SECRET),
         admin_max_user_ids=[777],
         media_dir=str(tmp_path / "media"),
+        # Закрытый порт: лимитер сразу получает отказ и пропускает запрос (не ждёт DNS).
+        redis_url="redis://127.0.0.1:1/0",
     )
 
 
 @pytest.fixture
 async def db_app(db_settings: Settings) -> AsyncIterator[FastAPI]:
     app = create_app(db_settings)
-    # Никаких сетевых геокодеров в тестах; нужные тесты подставляют фейковый.
-    app.state.geo = None
-    # Задачи копятся в памяти (тест выполняет их сам), реестр ЕГРЮЛ — фейковый или нет.
+    # Задачи копятся в памяти (тест выполняет их сам), Redis — словарь в памяти.
     app.state.jobs = MemoryJobQueue()
-    app.state.registry = None
+    app.state.redis = FakeRedis()
     yield app
     await app.state.db.kw["bind"].dispose()
 

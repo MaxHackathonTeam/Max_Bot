@@ -22,6 +22,13 @@ class RateLimitMiddleware:
             return 10, 60, "search"
         if method == "POST" and path == "/api/v1/events":
             return 10, 86400, "event-create"
+        if method == "POST" and path == "/api/v1/auth/guest":
+            return 5, 3600, "guest"
+        if method == "POST" and path == "/api/v1/auth/web-code":
+            return 10, 3600, "web-code"
+        if path == "/api/v1/auth/web-code/poll":
+            # Сайт опрашивает раз в 2–3 секунды, пока код живёт.
+            return 60, 60, "web-code-poll"
         if path.endswith("/verification/recheck"):
             return 1, 600, "verification"
         return self.default_limit, 60, "api"

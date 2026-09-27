@@ -1,12 +1,12 @@
-"""Справочники: категории, населённые пункты, подсказки адресов (§7.5)."""
+"""Справочники: категории и населённые пункты (§7.5). Доступны без входа."""
 
 from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import AuthDep, GeoDep, SessionDep
+from app.api.deps import SessionDep
 from app.core.errors import AppError
-from app.schemas.geo import AddressOut, CategoryOut, LocalityOut
+from app.schemas.geo import CategoryOut, LocalityOut
 from app.services import localities as localities_service
 from app.services.categories import CATEGORIES
 
@@ -20,13 +20,11 @@ async def list_categories() -> list[CategoryOut]:
 
 @router.get("/localities", response_model=list[LocalityOut], summary="Поиск населённого пункта")
 async def search_localities(
-    _: AuthDep,
     session: SessionDep,
-    geo: GeoDep,
     q: Annotated[str, Query(min_length=2, max_length=100)],
     limit: Annotated[int, Query(ge=1, le=20)] = 10,
 ) -> list[LocalityOut]:
-    return await localities_service.search(session, q, geo, limit)
+    return await localities_service.search(session, q, limit)
 
 
 @router.get(
@@ -35,14 +33,12 @@ async def search_localities(
     summary="Ближайшие населённые пункты к точке",
 )
 async def nearest_localities(
-    _: AuthDep,
     session: SessionDep,
-    geo: GeoDep,
     lat: Annotated[float, Query(ge=-90, le=90)],
     lon: Annotated[float, Query(ge=-180, le=180)],
     limit: Annotated[int, Query(ge=1, le=10)] = 5,
 ) -> list[LocalityOut]:
-    return await localities_service.nearest(session, lat, lon, geo, limit)
+    return await localities_service.nearest(session, lat, lon, limit)
 
 
 @router.get("/localities/{locality_id}", response_model=LocalityOut, summary="Населённый пункт")
@@ -51,13 +47,3 @@ async def get_locality(locality_id: int, session: SessionDep) -> LocalityOut:
     if locality is None:
         raise AppError("not_found", "Населённый пункт не найден", status_code=404)
     return locality
-
-
-@router.get("/geo/suggest", response_model=list[AddressOut], summary="Подсказки адресов")
-async def suggest_addresses(
-    _: AuthDep,
-    geo: GeoDep,
-    q: Annotated[str, Query(min_length=3, max_length=200)],
-    limit: Annotated[int, Query(ge=1, le=10)] = 5,
-) -> list[AddressOut]:
-    return await localities_service.suggest_addresses(geo, q, limit)

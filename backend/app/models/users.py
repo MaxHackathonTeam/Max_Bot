@@ -18,7 +18,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, IdMixin, TimestampMixin, enum_check
-from app.models.enums import ConsentDoc
+from app.models.enums import ConsentDoc, UserChannel
 
 
 class User(IdMixin, TimestampMixin, Base):
@@ -28,10 +28,14 @@ class User(IdMixin, TimestampMixin, Base):
         CheckConstraint(
             "birth_year IS NULL OR birth_year BETWEEN 1900 AND 2100", name="birth_year"
         ),
+        enum_check("channel", UserChannel),
     )
 
-    # NULL после удаления данных (FR-ONB-5): повторный вход создаёт нового пользователя.
+    # NULL у гостя сайта и после удаления данных (FR-ONB-5).
     max_user_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
+    channel: Mapped[str] = mapped_column(
+        String(8), server_default=text("'max'"), default=UserChannel.max
+    )
     first_name: Mapped[str | None] = mapped_column(String(128))
     last_name: Mapped[str | None] = mapped_column(String(128))
     username: Mapped[str | None] = mapped_column(String(128))

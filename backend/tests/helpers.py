@@ -71,29 +71,28 @@ async def login_as(
     return headers, body["user"]
 
 
-class FakeLlm:
-    """LlmClient для тестов: отдаёт ответы по очереди (последний — повторно)."""
+class FakeRedis:
+    """Минимум redis.asyncio для кодов входа: get/set(ex, nx, xx, keepttl)/delete, без TTL."""
 
-    model = "fake-llm"
+    def __init__(self) -> None:
+        self.data: dict[str, str] = {}
 
-    def __init__(self, *answers: str, fail: bool = False) -> None:
-        self.answers = list(answers)
-        self.fail = fail
-        self.calls = 0
+    async def get(self, key: str) -> str | None:
+        return self.data.get(key)
 
-    async def chat(
-        self, messages: list[dict[str, str]], *, temperature: float = 0.1, max_tokens: int = 600
-    ) -> Any:
-        from app.integrations.gigachat.client import ChatResult, LlmUnavailable
+    async def set(
+        self,
+        key: str,
+        value: str,
+        ex: int | None = None,
+        nx: bool = False,
+        xx: bool = False,
+        keepttl: bool = False,
+    ) -> bool:
+        if (nx and key in self.data) or (xx and key not in self.data):
+            return False
+        self.data[key] = value
+        return True
 
-        self.calls += 1
-        if self.fail:
-            raise LlmUnavailable("down")
-        text = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
-        return ChatResult(text=text, tokens_in=10, tokens_out=10, model=self.model)
-
-
-def verdict(verdict: str, confidence: float = 0.95, *categories: str) -> str:
-    return json.dumps(
-        {"verdict": verdict, "confidence": confidence, "categories": list(categories)}
-    )
+    async def delete(self, *keys: str) -> int:
+        return sum(self.data.pop(k, None) is not None for k in keys)

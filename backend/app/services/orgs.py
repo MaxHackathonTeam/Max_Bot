@@ -6,13 +6,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import AppError
-from app.integrations.dadata.party import PartyRegistry
 from app.models.enums import (
     AuditActor,
     ConsentDoc,
@@ -34,13 +32,10 @@ from app.schemas.orgs import (
     OrgCreate,
     OrgOut,
     OrgUpdate,
-    RegistryLookupOut,
 )
 from app.services import audit
 from app.services import users as users_service
 from app.services.events import utcnow
-
-log = structlog.get_logger(__name__)
 
 INVITE_TTL = timedelta(hours=24)
 INVITE_PREFIX = "inv_"
@@ -249,30 +244,6 @@ async def patch(
     )
     await session.commit()
     return access
-
-
-async def lookup(registry: PartyRegistry | None, inn: str) -> RegistryLookupOut:
-    if registry is None:
-        raise AppError("registry_unavailable", "Реестр сейчас недоступен, заполни вручную", 503)
-    try:
-        party = await registry.find_by_inn(inn)
-    except Exception as exc:
-        log.warning("registry_lookup_failed", error=type(exc).__name__)
-        raise AppError(
-            "registry_unavailable", "Реестр сейчас недоступен, заполни вручную", 503
-        ) from exc
-    if party is None:
-        return RegistryLookupOut(found=False, inn=inn)
-    return RegistryLookupOut(
-        found=True,
-        inn=party.inn,
-        ogrn=party.ogrn,
-        name=party.display_name,
-        status=party.status,
-        address=party.address,
-        region=party.region,
-        kind="individual" if party.kind == "INDIVIDUAL" else "legal",
-    )
 
 
 # --- Команда ---------------------------------------------------------------------------

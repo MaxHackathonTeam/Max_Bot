@@ -279,8 +279,8 @@ async def test_onboarding_by_text_and_interests(
     user = await _user(db_session, user_id)
     assert user.locality_id == locality.id
     assert user.interests == ["concert"]
-    # Состояние сброшено: обычный текст — снова «пока понимаю только команды».
-    await handle_update(bot, _text(user_id, name))
+    # Состояние сброшено: текст без признаков запроса — «пока понимаю только команды».
+    await handle_update(bot, _text(user_id, "привет, как дела"))
     assert _sent(max_api)[-1]["text"] == texts.UNKNOWN_TEXT
 
 
@@ -492,9 +492,8 @@ async def test_contact_confirms_phone(
     import hmac
 
     from tests.helpers import BOT_TOKEN, login_as
-    from tests.test_orgs_api import INN, FakeRegistry, _party
+    from tests.test_orgs_api import INN
 
-    db_app.state.registry = FakeRegistry(_party())
     user_id = random_max_id()
     headers, _ = await login_as(db_client, user_id, consents=("terms", "privacy", "org_pd"))
     org = (

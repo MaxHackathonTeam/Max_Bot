@@ -1,22 +1,17 @@
-"""Модерация событий (§6): решения правил, LLM и админа, жалобы, очередь.
+"""Модерация событий (§6): решения правил и админа, жалобы, очередь.
 
 Каждое решение пишется в moderation_decisions и audit_log.
 """
 
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any
 
-import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import texts
 from app.core.errors import AppError
-from app.core.jobs import MODERATE_EVENT, JobQueue
-from app.llm.runner import LlmRunner
-from app.llm.schemas import ModerationVerdictOut
 from app.models.engagement import Report
 from app.models.enums import (
     AuditActor,
@@ -27,24 +22,17 @@ from app.models.enums import (
     TrustTier,
 )
 from app.models.events import Event, EventSession
-from app.models.geo import Locality, Venue
 from app.models.orgs import Organization, OrgMember
 from app.models.system import ModerationDecision
 from app.models.users import User
+from app.moderation import rules
 from app.moderation.rules import Violation
 from app.schemas.manage import QueueEvent, ReportIn
 from app.services import audit
-from app.services.categories import BY_SLUG, CATEGORIES
 from app.services.events import utcnow
 from app.services.notify import Notifier
 
-log = structlog.get_logger(__name__)
-
-COMMUNITY_CONFIDENCE_MIN = 0.8
 REPORTS_TO_HIDE = 3
-# Повтор LLM-модерации при недоступности GigaChat: 5, 10, 20… мин, всего не дольше 6 ч.
-RETRY_BASE_S = 300
-RETRY_TOTAL = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
@@ -101,7 +89,7 @@ async def record_decision(
     )
     audit_actor = {
         ModerationActor.rules: AuditActor.system,
-        ModerationActor.llm: AuditActor.llm,
+        ModerationActor.llm: AuditActor.llm,  # legacy: решения прошлых версий
         ModerationActor.admin: AuditActor.admin,
     }[actor]
     diff: dict[str, Any] = {"verdict": verdict}
@@ -136,148 +124,52 @@ async def reject_by_rules(
     )
 
 
-# --- LLM ------------------------------------------------------------------------------
+# --- Правила подозрительности ---------------------------------------------------------
 
 
-async def _prompt_vars(session: AsyncSession, event: Event) -> dict[str, object]:
-    place = None
-    if event.venue_id is not None:
-        venue = await session.get(Venue, event.venue_id)
-        if venue is not None:
-            place = ", ".join(p for p in (venue.name, venue.address) if p)
-    if place is None and event.locality_id is not None:
-        place = await session.scalar(select(Locality.name).where(Locality.id == event.locality_id))
-    if event.is_online:
-        place = f"{place}; онлайн" if place else "онлайн"
-    price = event.price_type
-    if event.price_min is not None or event.price_max is not None:
-        price = f"{price}: {event.price_min or ''}–{event.price_max or ''} ₽"
-    category = BY_SLUG.get(event.category or "")
-    return {
-        "title": event.title,
-        "category": category.name if category else event.category,
-        "description": "\n".join(p for p in (event.short_description, event.description) if p),
-        "place": place,
-        "price": price,
-        "links": ", ".join(u for u in (event.ticket_url, event.online_url) if u),
-        "categories": ", ".join(c.slug for c in CATEGORIES),
-    }
+async def moderate_event(session: AsyncSession, event_id: int, *, notifier: Notifier) -> str | None:
+    """Задача воркера после отправки. Возвращает новый статус или None, если решать нечего.
 
-
-def llm_reason(value: ModerationVerdictOut | None) -> str:
-    if value is None:
-        return texts.MODERATION_DEFAULT_REASON
-    parts = [texts.MODERATION_CATEGORY_REASONS[c] for c in value.categories]
-    if not parts and value.reasons:
-        parts = value.reasons[:2]
-    return "; ".join(dict.fromkeys(parts)) or texts.MODERATION_DEFAULT_REASON
-
-
-def decide_llm(tier: str, verdict: ModerationVerdictOut | None) -> str:
-    """Статус по §6 п. 3. verdict=None — невалидный ответ, то же, что review."""
-    kind = verdict.verdict if verdict is not None else "review"
-    confidence = verdict.confidence if verdict is not None else 0.0
-    if tier == TrustTier.official:
-        return EventStatus.published if kind == "approve" else EventStatus.hidden
-    if kind == "approve" and confidence >= COMMUNITY_CONFIDENCE_MIN:
-        return EventStatus.published
-    if kind == "reject" and confidence >= COMMUNITY_CONFIDENCE_MIN:
-        return EventStatus.rejected
-    return EventStatus.pending
-
-
-def retry_delay(attempt: int) -> float | None:
-    """Задержка перед попыткой attempt+1 или None, если 6 часов исчерпаны."""
-    total = sum(RETRY_BASE_S * 2**i for i in range(attempt + 1))
-    if total > RETRY_TOTAL.total_seconds():
-        return None
-    return float(RETRY_BASE_S * 2**attempt)
-
-
-async def moderate_event(
-    session: AsyncSession,
-    event_id: int,
-    *,
-    llm: LlmRunner,
-    notifier: Notifier,
-    jobs: JobQueue,
-    attempt: int = 0,
-) -> str | None:
-    """Задача воркера. Возвращает новый статус или None, если модерировать нечего."""
-    event = await session.get(Event, event_id)
+    Официальные события уже опубликованы — правила только фиксируют решение. Событие сообщества
+    без подозрительных признаков публикуется, иначе ждёт администратора с причинами.
+    """
+    event = await session.get(Event, event_id, with_for_update=True)
     if event is None:
         return None
     tier = event.trust_tier
     expected = EventStatus.published if tier == TrustTier.official else EventStatus.pending
     if tier == TrustTier.demo or event.status != expected:
         return None
-    variables = await _prompt_vars(session, event)
-    version = event.updated_at
-    # Блокировку строки не держим, пока ждём LLM: автор может править событие.
-    await session.commit()
-
-    result = await llm.run_json("moderation", "moderation", ModerationVerdictOut, **variables)
-    if result.status == "unavailable":
-        if tier == TrustTier.community:
-            delay = retry_delay(attempt)
-            if delay is not None:
-                await jobs.enqueue(
-                    MODERATE_EVENT,
-                    event_id,
-                    attempt + 1,
-                    defer_s=delay,
-                    job_id=f"moderate:{event_id}:{attempt + 1}",
-                )
-            else:
-                log.warning("moderation_llm_gave_up", event_id=event_id)
-        # official остаётся опубликованным по одним правилам (§6 п. 3).
-        return str(expected)
-
-    await session.refresh(event, with_for_update=True)
-    if event.status != expected or event.updated_at != version:
-        # Событие изменили во время проверки — решение примет следующая задача.
-        await session.rollback()
-        return None
-    value = result.value
-    new_status = decide_llm(event.trust_tier, value)
+    points, reasons = rules.score(
+        rules.EventData(
+            title=event.title or "",
+            description=event.description,
+            short_description=event.short_description,
+        )
+    )
+    suspicious = points >= rules.SUSPICIOUS_SCORE
     before = event.status
-    reason = llm_reason(value) if new_status in (EventStatus.rejected, EventStatus.hidden) else None
-    event.status = new_status
-    if reason is not None:
-        event.moderation_reason = reason
-    if new_status == EventStatus.published and event.published_at is None:
-        event.published_at = utcnow()
-    verdict = ModerationVerdict(value.verdict) if value is not None else ModerationVerdict.review
+    if tier == TrustTier.community and not suspicious:
+        event.status = EventStatus.published
+        event.published_at = event.published_at or utcnow()
+        event.moderation_reason = None
+    elif tier == TrustTier.community:
+        event.moderation_reason = "; ".join(reasons)
     await record_decision(
         session,
         event,
-        actor=ModerationActor.llm,
-        verdict=verdict,
-        confidence=value.confidence if value is not None else None,
-        reasons=(
-            {
-                "categories": value.categories,
-                "reasons": value.reasons,
-                "fixed_category": value.fixed_category,
-            }
-            if value is not None
-            else {"invalid": True}
-        ),
-        model=result.model,
-        prompt_version=result.prompt_version,
+        actor=ModerationActor.rules,
+        verdict=ModerationVerdict.review if suspicious else ModerationVerdict.approve,
+        confidence=None,
+        reasons={"score": points, "reasons": reasons},
         status_before=before,
     )
     await session.commit()
-
-    if before != new_status:
-        text = {
-            str(EventStatus.published): texts.EVENT_PUBLISHED.format(title=event.title),
-            EventStatus.rejected: texts.EVENT_REJECTED.format(title=event.title, reason=reason),
-            EventStatus.hidden: texts.EVENT_HIDDEN.format(title=event.title, reason=reason),
-        }.get(new_status)
-        if text is not None:
-            await notify_owner(session, notifier, event, text)
-    return new_status
+    if before != event.status:
+        await notify_owner(
+            session, notifier, event, texts.EVENT_PUBLISHED.format(title=event.title)
+        )
+    return str(event.status)
 
 
 # --- Жалобы ----------------------------------------------------------------------------

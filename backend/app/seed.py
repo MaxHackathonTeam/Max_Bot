@@ -1,10 +1,12 @@
-"""Загрузка демо-набора из data/seed/: `python -m app.seed` (§7.1, §7.2).
+"""Загрузка демо-набора: `python -m app.seed` (§7.1, §7.2).
 
-Все события — `trust_tier=demo`, источник `demo` в `event_sources`, в ленте с плашкой.
-Загрузка идемпотентна: события находятся по (source, source_id), сеансы
-обновляются на месте. Даты в наборе относительные (`day` от сегодня в поясе
-населённого пункта), поэтому повторный запуск сдвигает их к текущей дате.
-Статус события (например, скрытие модерацией) и поля из `locked_fields` загрузка не меняет.
+Населённые пункты и площадки — реальные, из data/seed/*.json; события генерирует
+app.demo.generate (фиксированный seed). Все события — `trust_tier=demo`, источник `demo`
+в `event_sources`, в ленте с плашкой. Загрузка идемпотентна: события находятся по
+(source, source_id), сеансы обновляются на месте. Даты относительные (`day` от сегодня
+в поясе населённого пункта), поэтому повторный запуск сдвигает их к текущей дате.
+Статус события (например, скрытие модерацией) и поля из `locked_fields` загрузка не меняет;
+демо-события, которых больше нет в наборе, уходят в архив.
 """
 
 import asyncio
@@ -24,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import make_sessionmaker
+from app.demo.generate import build_events
 from app.models.enums import (
     AuditActor,
     EventStatus,
@@ -71,6 +74,8 @@ class VenueSeed(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
     org_kind: OrgKind | None = None
+    # Организация прошла проверку: её события идут в официальную ленту.
+    verified: bool = True
 
 
 class SessionSeed(BaseModel):
@@ -140,10 +145,11 @@ def read_seed(seed_dir: Path) -> SeedData:
             raise ValueError(f"{name}: ожидается список")
         return items
 
+    raw_localities, raw_venues = load("localities.json"), load("venues.json")
     data = SeedData(
-        localities=[LocalitySeed.model_validate(x) for x in load("localities.json")],
-        venues=[VenueSeed.model_validate(x) for x in load("venues.json")],
-        events=[EventSeed.model_validate(x) for x in load("events.json")],
+        localities=[LocalitySeed.model_validate(x) for x in raw_localities],
+        venues=[VenueSeed.model_validate(x) for x in raw_venues],
+        events=[EventSeed.model_validate(x) for x in build_events(raw_localities, raw_venues)],
     )
     locality_keys = {loc.key for loc in data.localities}
     venue_keys = {v.key: v for v in data.venues}
@@ -156,9 +162,11 @@ def read_seed(seed_dir: Path) -> SeedData:
         if event.venue is not None and event.venue not in venue_keys:
             raise ValueError(f"событие {event.key}: нет площадки {event.venue}")
         if event.organizer == "venue" and (
-            event.venue is None or venue_keys[event.venue].org_kind is None
+            event.venue is None
+            or venue_keys[event.venue].org_kind is None
+            or not venue_keys[event.venue].verified
         ):
-            raise ValueError(f"событие {event.key}: у площадки нет организации")
+            raise ValueError(f"событие {event.key}: у площадки нет проверенной организации")
     for kind, keys in (
         ("населённых пунктов", [x.key for x in data.localities]),
         ("площадок", [x.key for x in data.venues]),
@@ -243,6 +251,7 @@ class _Loader:
                     Organization.name == item.name, Organization.created_by == self.user.id
                 )
             )
+            status = VerificationStatus.verified if item.verified else VerificationStatus.unverified
             if org is None:
                 org = Organization(
                     name=item.name,
@@ -250,15 +259,20 @@ class _Loader:
                     locality_id=locality.id,
                     address=item.address,
                     description=ORG_NOTE,
-                    verification_status=VerificationStatus.verified,
-                    verification_method=VerificationMethod.manual,
-                    verified_at=self.now,
                     created_by=self.user.id,
                 )
                 self.session.add(org)
+                self._set_verification(org, status)
                 await self.session.flush()
                 await self.audit("org.create", "organization", org.id, {"source": SOURCE})
                 self.stats.add("created", "organizations")
+            elif org.verification_status != status:
+                old = org.verification_status
+                self._set_verification(org, status)
+                await self.audit(
+                    "org.update", "organization", org.id, {"verification_status": [old, status]}
+                )
+                self.stats.add("updated", "organizations")
             self.orgs[item.key] = org
         venue = await self.session.scalar(
             select(Venue).where(
@@ -279,6 +293,27 @@ class _Loader:
             await self.audit("venue.create", "venue", venue.id, {"source": SOURCE})
             self.stats.add("created", "venues")
         self.venues[item.key] = venue
+
+    def _set_verification(self, org: Organization, status: VerificationStatus) -> None:
+        verified = status == VerificationStatus.verified
+        org.verification_status = status
+        org.verification_method = VerificationMethod.manual if verified else None
+        org.verified_at = self.now if verified else None
+
+    async def archive_stale(self, keys: set[str]) -> None:
+        """Демо-события, выпавшие из набора, — в архив (не удаляем: на них могут быть «Пойду»)."""
+        rows = await self.session.execute(
+            select(Event, EventSource.source_id)
+            .join(EventSource, EventSource.event_id == Event.id)
+            .where(EventSource.source == SOURCE, Event.status != EventStatus.archived)
+        )
+        for event, key in rows.tuples():
+            if key in keys:
+                continue
+            old = event.status
+            event.status = EventStatus.archived
+            await self.audit("event.archive", "event", event.id, {"status": [old, "archived"]})
+            self.stats.add("updated", "archived")
 
     def _fields(self, item: EventSeed) -> dict[str, Any]:
         venue = self.venues[item.venue] if item.venue else None
@@ -347,6 +382,10 @@ class _Loader:
         }
         for name in changed:
             setattr(event, name, fields[name])
+        if event.status == EventStatus.archived:
+            # Вернулось в набор после archive_stale.
+            event.status = EventStatus.published
+            changed["status"] = ["archived", "published"]
         sessions_changed = await self._sync_sessions(event, item)
         if changed or sessions_changed:
             if sessions_changed:
@@ -404,6 +443,7 @@ async def load(
         await loader.venue(venue)
     for event in data.events:
         await loader.event(event)
+    await loader.archive_stale({e.key for e in data.events})
     await audit.record(
         session,
         action="seed.demo_load",

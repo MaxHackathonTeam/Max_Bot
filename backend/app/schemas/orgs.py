@@ -67,19 +67,6 @@ class OrgOut(BaseModel):
     my_role: OrgRole | None = Field(default=None, description="Роль текущего пользователя")
 
 
-class RegistryLookupOut(BaseModel):
-    """Автозаполнение формы организации из ЕГРЮЛ/ЕГРИП (DaData)."""
-
-    found: bool
-    inn: str
-    ogrn: str | None = None
-    name: str | None = None
-    status: str | None = None
-    address: str | None = None
-    region: str | None = None
-    kind: Literal["legal", "individual"] | None = None
-
-
 class MemberOut(BaseModel):
     user_id: int
     name: str
@@ -137,7 +124,7 @@ StepStatus = Literal["ok", "failed", "pending", "skipped"]
 
 
 class VerificationStep(BaseModel):
-    code: Literal["registry", "phone", "site_code", "page_check", "admin"]
+    code: Literal["registry", "phone", "site_code", "admin"]
     title: str
     status: StepStatus
     message: str | None = None

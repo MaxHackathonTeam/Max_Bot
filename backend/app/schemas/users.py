@@ -19,6 +19,7 @@ class ConsentState(BaseModel):
 class MeOut(BaseModel):
     id: int
     max_user_id: int | None
+    channel: Literal["max", "web"] = Field(description="web — гость сайта без MAX")
     first_name: str | None
     last_name: str | None
     username: str | None
@@ -79,3 +80,17 @@ class TokenOut(BaseModel):
     expires_at: datetime
     user: MeOut
     start_param: str | None = Field(default=None, description="Параметр диплинка startapp")
+
+
+class WebCodeOut(BaseModel):
+    code: str = Field(description="Код из 6 символов, живёт expires_in секунд, одноразовый")
+    deeplink: str = Field(description="https://max.ru/<бот>?start=login_<код>")
+    expires_in: int
+
+
+class WebCodePollIn(BaseModel):
+    code: str = Field(min_length=1, max_length=16)
+
+
+class WebCodePending(BaseModel):
+    status: Literal["pending"] = "pending"

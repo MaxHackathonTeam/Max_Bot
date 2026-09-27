@@ -1,7 +1,6 @@
-from datetime import datetime
 from typing import Any
 
-from sqlalchemy import REAL, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import REAL, BigInteger, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,26 +45,3 @@ class AuditLog(IdMixin, TimestampMixin, Base):
     entity_id: Mapped[int | None] = mapped_column(BigInteger)
     diff: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     request_id: Mapped[str | None] = mapped_column(String(64))
-
-
-class ImportRun(IdMixin, TimestampMixin, Base):
-    __tablename__ = "import_runs"
-
-    source: Mapped[str] = mapped_column(String(32), index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    stats: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    error: Mapped[str | None] = mapped_column(Text)
-
-
-class LlmCall(IdMixin, TimestampMixin, Base):
-    __tablename__ = "llm_calls"
-
-    purpose: Mapped[str] = mapped_column(String(32), index=True)
-    model: Mapped[str] = mapped_column(String(64))
-    prompt_version: Mapped[str | None] = mapped_column(String(32))
-    tokens_in: Mapped[int | None] = mapped_column(Integer)
-    tokens_out: Mapped[int | None] = mapped_column(Integer)
-    latency_ms: Mapped[int | None] = mapped_column(Integer)
-    ok: Mapped[bool] = mapped_column(Boolean)
-    error: Mapped[str | None] = mapped_column(Text)

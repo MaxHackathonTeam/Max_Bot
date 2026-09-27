@@ -76,8 +76,6 @@ services:
     command: ["arq", "--custom-log-dict", "app.workers.settings.ARQ_LOG_CONFIG", "app.workers.settings.WorkerSettings"]
     volumes:
       - media-data:/app/media
-      # Корневой сертификат Минцифры для GigaChat: GIGACHAT_CA_BUNDLE=/app/certs/russian_trusted_root_ca.cer
-      - ./infra/certs:/app/certs:ro
     healthcheck:
       test: ["CMD", "arq", "--check", "app.workers.settings.WorkerSettings"]
       interval: 30s

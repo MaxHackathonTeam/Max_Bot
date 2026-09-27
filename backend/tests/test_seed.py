@@ -8,24 +8,43 @@ import httpx
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.demo.generate import TARGET_EVENTS
+from app.models.enums import EventStatus
 from app.models.events import Event, EventSource
 from app.models.geo import Locality
 from app.models.system import AuditLog
-from app.seed import SOURCE, default_seed_dir, load, read_seed
+from app.seed import SOURCE, SeedData, default_seed_dir, load, read_seed
 from tests.helpers import login
 
 TZ = ZoneInfo("Europe/Moscow")
-TATARSTAN = {"kazan", "vysokaya_gora", "laishevo"}
+REGIONS = {"53", "16", "76"}
 
 
 def test_seed_files_are_valid() -> None:
     data = read_seed(default_seed_dir())
-    novgorod = [e for e in data.events if e.locality not in TATARSTAN]
-    # §7.2: 150–300 событий для демо-региона + несколько для Казани.
-    assert 150 <= len(novgorod) <= 300
-    assert len(data.events) > len(novgorod)
-    assert any(e.organizer is None for e in data.events)
-    assert any(e.organizer == "venue" for e in data.events)
+    assert len(data.localities) >= 30 and len(data.venues) >= 80
+    assert {loc.region_code for loc in data.localities} == REGIONS
+    orgs = [v for v in data.venues if v.org_kind is not None]
+    assert len(orgs) >= 40 and any(not v.verified for v in orgs)
+    assert len(data.events) == TARGET_EVENTS
+    region = {loc.key: loc.region_code for loc in data.localities}
+    assert {region[e.locality] for e in data.events} == REGIONS
+    official = [e for e in data.events if e.organizer == "venue"]
+    assert official and len(official) < len(data.events)
+    assert any(e.pushkin_card for e in official)
+    assert not any(e.pushkin_card for e in data.events if e.organizer is None)
+    assert {e.price_type for e in data.events} >= {"free", "paid"}
+    days = [s.day for e in data.events for s in e.sessions]
+    assert min(days) == 0 and 21 <= max(days) <= 28
+    # События непроверенных организаций — только в ленте сообщества.
+    unverified = {v.key for v in orgs if not v.verified}
+    assert all(e.organizer is None for e in data.events if e.venue in unverified)
+
+
+def test_seed_is_deterministic() -> None:
+    first = read_seed(default_seed_dir()).events
+    second = read_seed(default_seed_dir()).events
+    assert [e.model_dump() for e in first] == [e.model_dump() for e in second]
 
 
 async def _count(session: AsyncSession, stmt: Select[tuple[int]]) -> int:
@@ -110,3 +129,23 @@ async def test_seed_reload_shifts_sessions_and_keeps_saved(
     shifted = next(s for s in detail["sessions"] if s["id"] == session_id)
     before = datetime.fromisoformat(card["next_session"]["starts_at"])
     assert datetime.fromisoformat(shifted["starts_at"]) - before == timedelta(days=1)
+
+
+async def test_seed_archives_dropped_events(db_session: AsyncSession) -> None:
+    data = read_seed(default_seed_dir())
+    now = datetime.now(TZ)
+    await load(db_session, data, now=now)
+    dropped = data.events[-1]
+    status = (
+        select(Event.status)
+        .join(EventSource, EventSource.event_id == Event.id)
+        .where(EventSource.source == SOURCE, EventSource.source_id == dropped.key)
+    )
+
+    partial = SeedData(data.localities, data.venues, data.events[:-1])
+    stats = await load(db_session, partial, now=now)
+    assert stats.updated.get("archived") == 1
+    assert await db_session.scalar(status) == EventStatus.archived
+
+    await load(db_session, data, now=now)
+    assert await db_session.scalar(status) == EventStatus.published

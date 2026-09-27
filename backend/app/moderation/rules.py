@@ -187,3 +187,65 @@ def check(data: EventData, now: datetime) -> list[Violation]:
 
 def content_reason(violations: list[Violation]) -> str:
     return "; ".join(dict.fromkeys(v.message for v in violations if v.kind == "content"))
+
+
+# --- Оценка подозрительности (сообщество) ---------------------------------------------
+# Чистое событие публикуется сразу, подозрительное ждёт администратора с причинами.
+
+SUSPICIOUS_SCORE = 2
+CAPS_MIN_LETTERS = 8
+CAPS_SHARE = 0.7
+DESCRIPTION_MIN = 30
+AD_WORDS = (
+    "заработ",
+    "кредит",
+    "займ",
+    "казино",
+    "ставк",
+    "букмекер",
+    "промокод",
+    "скидк",
+    "распродаж",
+    "подпишись",
+    "подписывайтесь",
+    "розыгрыш",
+    "только сегодня",
+    "криптовалют",
+    "инвестиц",
+)
+_REPEAT_CHAR = re.compile(r"(\w)\1{4,}")
+_EXCLAIM = re.compile(r"[!?]{3,}")
+_WORD = re.compile(r"[а-яёa-z]{3,}", re.I)
+
+
+def _caps(text: str) -> bool:
+    letters = [c for c in text if c.isalpha()]
+    return len(letters) >= CAPS_MIN_LETTERS and (
+        sum(c.isupper() for c in letters) / len(letters) >= CAPS_SHARE
+    )
+
+
+def _repeated_words(text: str) -> bool:
+    words = [w.lower() for w in _WORD.findall(text)]
+    if len(words) < 6:
+        return False
+    top = max(words.count(w) for w in set(words))
+    return top >= 4 and top / len(words) >= 0.25
+
+
+def score(data: EventData) -> tuple[int, list[str]]:
+    """Баллы подозрительности и причины для администратора."""
+    found: list[tuple[int, str]] = []
+    text = "\n".join(p for p in (data.title, data.short_description, data.description) if p)
+    if _caps(data.title):
+        found.append((2, "название заглавными буквами"))
+    if _REPEAT_CHAR.search(text) or _EXCLAIM.search(text):
+        found.append((1, "повторы символов"))
+    if _repeated_words(text):
+        found.append((1, "повторы слов"))
+    normalized = _normalize(text)
+    if any(w in normalized for w in AD_WORDS):
+        found.append((2, "похоже на рекламу"))
+    if len((data.description or data.short_description or "").strip()) < DESCRIPTION_MIN:
+        found.append((1, "мало информации о событии"))
+    return sum(p for p, _ in found), [r for _, r in found]

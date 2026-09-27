@@ -24,11 +24,7 @@ from app.core.logging import configure_logging
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.request_id import RequestIdMiddleware
 from app.db.session import make_engine, make_sessionmaker
-from app.integrations.dadata.party import DadataPartyRegistry
-from app.integrations.geo_factory import build_geo_provider
-from app.integrations.gigachat.client import gigachat_from_settings
 from app.integrations.max import client_from_settings
-from app.llm.runner import LlmRunner
 
 log = structlog.get_logger(__name__)
 
@@ -56,12 +52,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     update_sink = ArqUpdateSink(settings.redis_url)
     redis = Redis.from_url(settings.redis_url)
     jobs = ArqJobQueue(settings.redis_url)
-    registry = (
-        DadataPartyRegistry(settings.dadata_api_key.get_secret_value())
-        if settings.dadata_api_key is not None and not settings.offline_mode
-        else None
-    )
-    gigachat = gigachat_from_settings(settings, redis)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -78,10 +68,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await subscribe_task
         await update_sink.close()
         await app.state.jobs.close()
-        if registry is not None:
-            await registry.aclose()
-        if gigachat is not None:
-            await gigachat.aclose()
         if app.state.max_client is not None:
             await app.state.max_client.aclose()
         await redis.aclose()
@@ -99,11 +85,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.db = make_sessionmaker(engine)
     app.state.update_sink = update_sink
     app.state.redis = redis
-    app.state.geo = build_geo_provider(settings, redis)
     app.state.jobs = jobs
-    app.state.registry = registry
     app.state.max_client = client_from_settings(settings)
-    app.state.llm = LlmRunner(gigachat, app.state.db, settings.llm_daily_token_budget)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
