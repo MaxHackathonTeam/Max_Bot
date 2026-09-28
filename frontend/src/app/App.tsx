@@ -2,9 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useBackButton } from "../bridge/useBackButton";
+import { LoginProvider } from "../components/LoginDialog";
 import { DraftPage } from "../pages/DraftPage";
 import { EventPage } from "../pages/EventPage";
 import { HomePage } from "../pages/HomePage";
+import { ModerationEventPage } from "../pages/ModerationEventPage";
+import { ModerationPage } from "../pages/ModerationPage";
+import { MyEventsPage } from "../pages/MyEventsPage";
+import { NewEventPage } from "../pages/NewEventPage";
 import { InvitePage } from "../pages/InvitePage";
 import { LegalPage } from "../pages/LegalPage";
 import { OrgPage } from "../pages/OrgPage";
@@ -51,6 +56,7 @@ export function App() {
       <ToastProvider>
         <BrowserRouter>
           <SessionProvider>
+            <LoginProvider>
             <BackButton />
             <DeeplinkRedirect />
             <AppShell>
@@ -60,12 +66,17 @@ export function App() {
                 <Route path="/saved" element={<SavedPage />} />
                 <Route path="/org/:id" element={<OrgPage />} />
                 <Route path="/draft/:id" element={<DraftPage />} />
+                <Route path="/new" element={<NewEventPage />} />
+                <Route path="/my" element={<MyEventsPage />} />
+                <Route path="/moderation" element={<ModerationPage />} />
+                <Route path="/moderation/:id" element={<ModerationEventPage />} />
                 <Route path="/invite/:token" element={<InvitePage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/legal/:doc" element={<LegalPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </AppShell>
+            </LoginProvider>
           </SessionProvider>
         </BrowserRouter>
       </ToastProvider>

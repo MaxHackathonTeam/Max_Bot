@@ -106,7 +106,7 @@ def build_events(
         for tpl in rng.sample(fitting, min(UNVERIFIED_PER_ORG, len(fitting))):
             add(tpl, venue["locality"], venue["key"], official=False)
 
-    # От сообщества: жители и клубы на открытых площадках, в ДК или без площадки.
+    # От жителей: жители и клубы на открытых площадках, в ДК или без площадки.
     open_venues = [v for v in venues if v.get("org_kind") is None]
     dk_venues = [v for v in venues if v.get("org_kind") == "dk" or "Дом культуры" in v["name"]]
     places = [loc["key"] for loc in localities]

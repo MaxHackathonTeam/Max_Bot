@@ -125,12 +125,17 @@ export function useAcceptConsents() {
   });
 }
 
+/** Куда сохранять выбор места: в профиль (вошёл и дал согласие) или на устройство (гость). */
+export function localityTarget(me: Me | null | undefined): "profile" | "device" {
+  return me && hasConsent(me) ? "profile" : "device";
+}
+
 /** Сохранить место: в профиль при согласии, иначе только на устройстве. */
 export function useSetLocality() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: async ({ me, localityId }: { me: Me | null; localityId: number }) => {
-      if (me && hasConsent(me)) return updateMe({ locality_id: localityId });
+      if (localityTarget(me) === "profile") return updateMe({ locality_id: localityId });
       writePref(LOCAL_LOCALITY, String(localityId));
       return null;
     },

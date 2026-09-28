@@ -5,7 +5,9 @@ import { ApiError } from "../api/client";
 import { useSession } from "../app/session";
 import { openExternal } from "../bridge/actions";
 import { Button } from "../ui/Button";
+import { buttonClass } from "../ui/classes";
 import { Spinner } from "../ui/Spinner";
+import { QrCode } from "./QrCode";
 import { useToast } from "../ui/toastContext";
 
 const POLL_MS = 2000;
@@ -28,7 +30,16 @@ function left(deadline: number): string {
  * Вход через MAX с сайта: код → бот подтверждает → опрос /auth/web-code/poll каждые 2 с
  * (не дольше 5 минут). Данные гостя бэкенд переносит в аккаунт MAX.
  */
-export function MaxLogin({ onDone, compact = false }: { onDone?: () => void; compact?: boolean }) {
+export function MaxLogin({
+  onDone,
+  compact = false,
+  autoStart = false,
+}: {
+  onDone?: () => void;
+  compact?: boolean;
+  /** Сразу запросить код (модальное окно входа). */
+  autoStart?: boolean;
+}) {
   const { signIn } = useSession();
   const toast = useToast();
   const [state, setState] = useState<State>({ step: "idle" });
@@ -50,6 +61,14 @@ export function MaxLogin({ onDone, compact = false }: { onDone?: () => void; com
       setState({ step: "error", message: error instanceof Error ? error.message : "Не получилось получить код" });
     }
   };
+
+  const started = useRef(false);
+  useEffect(() => {
+    if (!autoStart || started.current) return;
+    started.current = true;
+    // Код запрашиваем один раз при открытии: started защищает от повторного вызова.
+    void start();
+  }, [autoStart]);
 
   const waiting = state.step === "waiting" ? state : null;
   useEffect(() => {
@@ -99,17 +118,40 @@ export function MaxLogin({ onDone, compact = false }: { onDone?: () => void; com
 
   if (state.step === "waiting")
     return (
-      <div className="stack" aria-live="polite">
-        <p>Открой бота «Афиша рядом» в MAX и подтверди вход. Код для сверки:</p>
-        <div className="code-display" aria-label={`Код ${state.code.code.split("").join(" ")}`}>
-          {state.code.code}
+      <div className="stack login-code">
+        <div className="login-code__grid">
+          <QrCode value={state.code.deeplink} label="QR-код для входа: наведи камеру телефона" />
+          <div className="stack">
+            <p className="small muted">Код для сверки в боте</p>
+            <div className="code-display" aria-label={`Код ${state.code.code.split("").join(" ")}`}>
+              {state.code.code}
+            </div>
+            <a
+              className={buttonClass({ variant: "primary", size: "lg", block: true })}
+              href={state.code.deeplink}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => {
+                // В MAX ссылку открывает Bridge, в браузере — обычная вкладка.
+                e.preventDefault();
+                openExternal(state.code.deeplink);
+              }}
+            >
+              <ExternalLink size={18} aria-hidden />
+              Открыть бота
+            </a>
+          </div>
         </div>
-        <Button variant="primary" size="lg" block icon={<ExternalLink size={18} aria-hidden />} onClick={() => openExternal(state.code.deeplink)}>
-          Открыть бота
-        </Button>
-        <div className="row small muted">
+        <div className="row small muted" aria-live="polite">
           <Spinner />
-          <span className="grow">Ждём подтверждения · код действует ещё {left(state.deadline)}</span>
+          <span className="grow">
+            Ждём подтверждения · код действует <span className="nowrap">ещё {left(state.deadline)}</span>
+          </span>
+        </div>
+        <div className="row row--wrap">
+          <Button variant="ghost" size="sm" icon={<RefreshCw size={16} aria-hidden />} onClick={() => void start()}>
+            Получить новый код
+          </Button>
           <Button variant="ghost" size="sm" icon={<X size={16} aria-hidden />} onClick={() => setState({ step: "idle" })}>
             Отмена
           </Button>

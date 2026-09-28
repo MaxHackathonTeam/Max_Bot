@@ -174,8 +174,8 @@ export interface Category {
   emoji: string;
 }
 
-export function searchLocalities(q: string): Promise<Locality[]> {
-  return api<Locality[]>(`/localities?${new URLSearchParams({ q })}`);
+export function searchLocalities(q: string, limit = 10): Promise<Locality[]> {
+  return api<Locality[]>(`/localities?${new URLSearchParams({ q, limit: String(limit) })}`);
 }
 
 export function nearestLocalities(
@@ -269,6 +269,9 @@ export interface EventQuery {
   locality_id?: number;
   radius_km?: Radius;
   date?: DatePreset;
+  /** Период в днях пункта события, ГГГГ-ММ-ДД включительно. */
+  date_from?: string;
+  date_to?: string;
   category?: string[];
   free?: boolean;
   price_max?: number;

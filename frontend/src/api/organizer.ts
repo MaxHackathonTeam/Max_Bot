@@ -362,3 +362,28 @@ export const STATUS_FILTERS: (string | null)[] = [
   "hidden",
   "cancelled",
 ];
+
+// --- Разбор анонса и проверка перед отправкой -------------------------------------------------
+
+export interface CheckViolation {
+  code: string;
+  field: string;
+  message: string;
+  kind: string;
+}
+
+export interface CheckOut {
+  violations: CheckViolation[];
+  warnings: string[];
+}
+
+/** Правила модерации (rules.py) до отправки: что помешает и что стоит поправить. */
+export const checkEvent = (id: number) =>
+  api<CheckOut>(`/events/${id}/check`, { method: "POST" });
+
+/** Черновик из текста анонса: детерминированный разбор, распознанное — в ai_fields. */
+export const draftFromText = (text: string, orgId: number | null) =>
+  api<EventManage>("/drafts/from-text", {
+    method: "POST",
+    body: JSON.stringify({ text, org_id: orgId }),
+  });
