@@ -13,6 +13,7 @@ from app.bot import keyboards, texts
 from app.bot.dispatcher import BotContext, handle_update
 from app.bot.fsm import RedisStateStore
 from app.bot.notify import BotNotifier
+from app.bot.subscriptions import check_webhook
 from app.core.config import get_settings
 from app.core.jobs import ArqJobQueue
 from app.core.logging import configure_logging
@@ -49,6 +50,13 @@ async def process_bot_update(ctx: dict[str, Any], update: dict[str, Any]) -> Non
         log.warning("bot_update_dropped", reason="MAX_BOT_TOKEN не задан")
         return
     await handle_update(bot, update)
+
+
+async def ensure_bot_webhook(ctx: dict[str, Any]) -> str | None:
+    """Cron: подписка на webhook могла пропасть (снял poller, сброс в MAX) — восстанавливаем."""
+    if _settings.bot_mode != "webhook":
+        return None
+    return await check_webhook(_settings, ctx["app_redis"], force=False)
 
 
 async def moderate_event(ctx: dict[str, Any], event_id: int, _attempt: int = 0) -> str | None:
@@ -242,6 +250,7 @@ class WorkerSettings:
         schedule_reminders,
         deliver_notifications,
         schedule_digest,
+        ensure_bot_webhook,
     ]
     on_startup = startup
     on_shutdown = shutdown
@@ -251,4 +260,5 @@ class WorkerSettings:
         cron(schedule_reminders, minute={0, 15, 30, 45}),
         cron(deliver_notifications, minute=set(range(60))),
         cron(schedule_digest, weekday={3}, hour={18}, minute={0}),
+        cron(ensure_bot_webhook, minute=set(range(2, 60, 5))),
     ]

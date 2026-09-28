@@ -1,6 +1,7 @@
 """Long polling бота для локального запуска (профиль compose `local`, BOT_MODE=polling).
 
-Перед стартом снимает webhook-подписки: при активном webhook GET /updates не работает.
+При активном webhook GET /updates не работает. Снимать подписки poller будет только с
+BOT_POLLER_TAKEOVER=1 — иначе локальный запуск с боевым токеном отключил бы прод-бота.
 """
 
 import asyncio
@@ -57,6 +58,16 @@ async def main() -> None:
         redis=redis,
     )
     try:
+        subs = await client.list_subscriptions()
+        if subs and not settings.bot_poller_takeover:
+            log.error(
+                "bot_poller_refused",
+                message="У бота есть webhook-подписка (прод?). Polling её снимет и прод-бот "
+                "замолчит. Если это действительно нужно — BOT_POLLER_TAKEOVER=1.",
+                subscriptions=len(subs),
+            )
+            await asyncio.Event().wait()
+            return
         await drop_webhooks(client)
         log.info("bot_poller_started")
         await poll(ctx, asyncio.Event())

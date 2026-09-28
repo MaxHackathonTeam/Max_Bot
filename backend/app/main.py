@@ -16,7 +16,7 @@ from app.api.bot_webhook import router as bot_webhook_router
 from app.api.health import router as health_router
 from app.api.v1 import router as v1_router
 from app.bot.queue import ArqUpdateSink
-from app.bot.subscriptions import ensure_webhook
+from app.bot.subscriptions import check_webhook
 from app.core.config import Settings, get_settings
 from app.core.errors import register_error_handlers
 from app.core.jobs import ArqJobQueue
@@ -29,20 +29,10 @@ from app.integrations.max import client_from_settings
 log = structlog.get_logger(__name__)
 
 
-async def _subscribe_webhook(settings: Settings) -> None:
-    client = client_from_settings(settings)
-    if client is None or settings.max_webhook_secret is None:
-        log.warning("bot_webhook_not_configured")
-        return
-    try:
-        await ensure_webhook(
-            client, settings.webhook_url, settings.max_webhook_secret.get_secret_value()
-        )
-    except Exception:
-        # API продолжает работать; подписку можно повторить перезапуском.
-        log.exception("bot_webhook_subscribe_failed")
-    finally:
-        await client.aclose()
+async def _subscribe_webhook(settings: Settings, redis: Redis) -> None:
+    # Пересоздаём подписку при каждом старте: так в MAX всегда текущий секрет.
+    # Ошибки не роняют API: состояние видно в /ready, cron воркера повторит попытку.
+    await check_webhook(settings, redis, force=True)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -60,7 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         subscribe_task = None
         if settings.bot_mode == "webhook":
-            subscribe_task = asyncio.create_task(_subscribe_webhook(settings))
+            subscribe_task = asyncio.create_task(_subscribe_webhook(settings, redis))
         yield
         if subscribe_task is not None:
             subscribe_task.cancel()

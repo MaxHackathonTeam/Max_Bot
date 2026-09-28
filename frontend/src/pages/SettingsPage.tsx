@@ -170,6 +170,7 @@ export function SettingsPage() {
             <ListRow icon={<Building size={18} aria-hidden />} title="Кабинет организатора" subtitle="Свои события, организация, проверка" to="/org/0" />
             <ListRow icon={<FileText size={18} aria-hidden />} title="Условия использования" to="/legal/terms" />
             <ListRow icon={<ShieldCheck size={18} aria-hidden />} title="Политика обработки персональных данных" to="/legal/privacy" />
+            <ListRow icon={<MapPin size={18} aria-hidden />} title="Источники данных" subtitle="© участники OpenStreetMap, ODbL" to="/legal/data" />
           </div>
         </section>
 

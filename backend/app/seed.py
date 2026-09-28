@@ -1,5 +1,7 @@
 """Загрузка демо-набора: `python -m app.seed` (§7.1, §7.2).
 
+Сначала — справочник НП России (app.seed_localities, всегда), затем демо (SEED_DEMO=1).
+
 Населённые пункты и площадки — реальные, из data/seed/*.json; события генерирует
 app.demo.generate (фиксированный seed). Все события — `trust_tier=demo`, источник `demo`
 в `event_sources`, в ленте с плашкой. Загрузка идемпотентна: события находятся по
@@ -20,9 +22,10 @@ from zoneinfo import ZoneInfo
 
 import structlog
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app import seed_localities
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import make_sessionmaker
@@ -45,7 +48,13 @@ from app.models.orgs import Organization
 from app.models.users import User
 from app.services import audit
 from app.services.categories import is_known
-from app.services.localities import SAME_PLACE_M, geo_point, timezone_for, wkt_point
+from app.services.localities import (
+    SAME_NAME_M,
+    geo_point,
+    normalize,
+    timezone_for,
+    wkt_point,
+)
 
 SOURCE = "demo"
 SEED_USERNAME = "afisha_demo_seed"
@@ -214,14 +223,17 @@ class _Loader:
 
     async def locality(self, item: LocalitySeed) -> None:
         point = geo_point(item.lat, item.lon)
-        # Уже есть (из прошлой загрузки или от геокодера) — берём как есть.
+        # Уже есть (справочник НП или прошлая загрузка) — берём как есть. Правило то же,
+        # что при привязке в app.seed_localities: точное имя или «имя …», ближайший.
+        norm = normalize(item.name)
+        exact = Locality.name_norm == norm
         found = await self.session.scalar(
             select(Locality)
             .where(
-                func.lower(Locality.name) == item.name.lower(),
-                func.ST_DWithin(Locality.point, point, SAME_PLACE_M),
+                exact | Locality.name_norm.like(norm + " %"),
+                func.ST_DWithin(Locality.point, point, SAME_NAME_M),
             )
-            .order_by(func.ST_Distance(Locality.point, point))
+            .order_by(desc(exact), func.ST_Distance(Locality.point, point))
             .limit(1)
         )
         if found is None:
@@ -459,12 +471,17 @@ async def load(
 async def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
-    if not settings.seed_demo:
-        log.info("seed_skipped", reason="SEED_DEMO=0")
-        return
-    data = read_seed(default_seed_dir())
+    seed_dir = default_seed_dir()
     engine = create_async_engine(settings.alembic_database_url)
     try:
+        # Справочник НП — реальные данные, грузится всегда (повторно — только при новом файле).
+        async with make_sessionmaker(engine)() as session:
+            await seed_localities.load(session, seed_dir / seed_localities.FILE_NAME)
+            await session.commit()
+        if not settings.seed_demo:
+            log.info("seed_skipped", reason="SEED_DEMO=0")
+            return
+        data = read_seed(seed_dir)
         async with make_sessionmaker(engine)() as session:
             stats = await load(session, data)
     finally:

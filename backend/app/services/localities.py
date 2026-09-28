@@ -14,6 +14,9 @@ from app.schemas.geo import LocalityOut
 DEFAULT_TIMEZONE = "Europe/Moscow"
 NEAREST_MAX_M = 50_000
 SAME_PLACE_M = 5_000
+# Привязка демо-НП к справочнику: координаты демо-набора бывают неточны на 10–20 км,
+# а в OSM имя бывает длиннее («Ростов» → «Ростов Великий»).
+SAME_NAME_M = 25_000
 
 
 @lru_cache
@@ -73,15 +76,30 @@ async def get_out(session: AsyncSession, locality_id: int) -> LocalityOut | None
     return _to_out(row) if row is not None else None
 
 
+_NORM_TABLE = str.maketrans({"ё": "е", "-": " ", "–": " "})
+
+
+def normalize(text: str) -> str:
+    """Как колонка name_norm: lower, ё→е, дефисы → пробел (плюс схлопываем пробелы)."""
+    return " ".join(text.lower().translate(_NORM_TABLE).split())
+
+
+def _escape_like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 async def _search_db(session: AsyncSession, query: str, limit: int) -> list[LocalityOut]:
-    prefix = Locality.name.istartswith(query, autoescape=True)
+    # Порядок: точное совпадение > префикс > похожесть (pg_trgm) > население.
+    # Тёзки различаются районом и регионом в ответе.
+    norm = normalize(query)
+    prefix = Locality.name_norm.like(_escape_like(norm) + "%", escape="\\")
     stmt = (
         _select_out()
-        .where(prefix | Locality.name.op("%")(query))
+        .where(prefix | Locality.name_norm.op("%")(norm))
         .order_by(
-            desc(func.lower(Locality.name) == query.lower()),
+            desc(Locality.name_norm == norm),
             desc(prefix),
-            desc(func.similarity(Locality.name, query)),
+            desc(func.similarity(Locality.name_norm, norm)),
             nulls_last(desc(Locality.population)),
             Locality.id,
         )
@@ -94,7 +112,7 @@ async def search(session: AsyncSession, query: str, limit: int = 10) -> list[Loc
     query = query.strip()
     if len(query) < 2:
         return []
-    return await _search_db(session, query, limit)
+    return await _search_db(session, query, min(limit, 10))
 
 
 async def _nearest_db(
