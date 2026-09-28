@@ -14,8 +14,12 @@ QUEUE_LIMIT = 20
 AUDIT_LIMIT = 50
 
 
-async def queue(session: AsyncSession, limit: int = QUEUE_LIMIT) -> QueueOut:
-    events = await moderation_service.queue_events(session, limit)
+async def queue(
+    session: AsyncSession,
+    limit: int = QUEUE_LIMIT,
+    kind: moderation_service.QueueFilter = "all",
+) -> QueueOut:
+    events = await moderation_service.queue_events(session, limit, kind)
     verifications = [
         QueueVerification(
             id=request.id,

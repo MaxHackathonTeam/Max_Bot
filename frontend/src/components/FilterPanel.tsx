@@ -25,7 +25,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /**
- * Редкие фильтры FR-CAT-2: радиус, категории, цена, формат, сортировка.
+ * Редкие фильтры FR-CAT-2: период, радиус, категории, цена, формат, сортировка.
  * На десктопе стоит в боковой колонке и применяется сразу, на телефоне — в шторке.
  */
 export function FilterPanel({
@@ -39,9 +39,34 @@ export function FilterPanel({
 }) {
   const patch = (p: Partial<FeedFilters>) => onChange({ ...value, ...p });
   const current = value.radius ?? radius;
+  // Свой период: пустые обе даты — период снят.
+  const setDay = (key: "from" | "to", day: string) => {
+    const next = { ...value, [key]: day || null };
+    const on = next.from !== null || next.to !== null;
+    onChange({ ...next, date: on ? "range" : value.date === "range" ? null : value.date });
+  };
 
   return (
     <div className="stack stack--loose">
+      <Group title="Свои даты">
+        <div className="row">
+          <Input
+            type="date"
+            aria-label="С даты"
+            value={value.from ?? ""}
+            max={value.to ?? undefined}
+            onChange={(e) => setDay("from", e.target.value)}
+          />
+          <Input
+            type="date"
+            aria-label="По дату"
+            value={value.to ?? ""}
+            min={value.from ?? undefined}
+            onChange={(e) => setDay("to", e.target.value)}
+          />
+        </div>
+      </Group>
+
       <Group title="Радиус">
         <div className="chips">
           {RADII.map((r) => (

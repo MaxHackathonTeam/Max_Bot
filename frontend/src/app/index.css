@@ -94,6 +94,18 @@ select {
   white-space: nowrap;
 }
 
+/* Длинная часть подписи: на узком экране прячется, но остаётся для скринридера. */
+@media (max-width: 419px) {
+  .wide-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -261,7 +273,7 @@ select {
   bottom: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: var(--card);
   border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
@@ -1487,4 +1499,189 @@ fieldset.filter-group {
 fieldset.filter-group > legend {
   padding: 0;
   margin-bottom: 10px;
+}
+
+/* --- Вход и меню профиля ------------------------------------------------------------ */
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.login-code__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+}
+
+.qr {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.menu {
+  position: relative;
+}
+
+.menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  max-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.menu__trigger:focus-visible,
+.menu__item:focus-visible {
+  outline: 2px solid var(--tomato);
+  outline-offset: 2px;
+}
+
+.menu__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu__panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  min-width: 220px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+}
+
+.menu__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.menu__item {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.menu__item:hover,
+.menu__item:focus {
+  background: var(--paper-deep);
+}
+
+@media (max-width: 480px) {
+  .menu__name {
+    display: none;
+  }
+}
+
+/* --- Автоподстановка пункта --------------------------------------------------------- */
+
+
+.combo {
+  position: relative;
+}
+
+.combo__list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 4px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+}
+
+.combo__list[hidden] {
+  display: none;
+}
+
+.combo__option {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.combo__option > svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--ink-soft);
+}
+
+.combo__option[aria-selected="true"] {
+  background: var(--paper-deep);
+  outline: 2px solid var(--tomato);
+  outline-offset: -2px;
+}
+
+.combo__name {
+  display: block;
+  font-weight: 600;
+}
+
+.combo__name mark {
+  background: var(--sun-tint);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.combo__sub {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+/* --- Форма афиши и модерация --------------------------------------------------------- */
+
+.feed__grid--one {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 560px;
+}
+
+mark.parsed {
+  background: var(--sun-tint);
+  color: inherit;
+  padding: 0 4px;
+  margin-right: 4px;
+  border-radius: var(--r-sm);
+  font-weight: 600;
+}
+
+.page--flush {
+  flex: none;
+  padding-bottom: 0;
 }

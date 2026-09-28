@@ -1,6 +1,7 @@
-// Форма события в 5 шагов (FR-PUB): состояние формы, перевод времени из пояса события
+// Форма события в 6 шагов (FR-PUB): состояние формы, перевод времени из пояса события
 // в UTC и обратно, проверка шагов до отправки. Чистые функции, покрыты тестами.
 
+import type { EventCard } from "../api/client";
 import type {
   AgeRating,
   EventFields,
@@ -9,12 +10,14 @@ import type {
 } from "../api/organizer";
 
 export const STEPS = [
-  "Главное",
-  "Где и когда",
+  "Основное",
+  "Когда",
+  "Где",
   "Цена и возраст",
-  "Обложка и контакты",
+  "Обложка",
   "Проверка",
 ] as const;
+export const STEP = { main: 0, when: 1, where: 2, price: 3, cover: 4, review: 5 } as const;
 export const AGE_RATINGS: AgeRating[] = [0, 6, 12, 16, 18];
 
 export interface SessionDraft {
@@ -179,19 +182,15 @@ export function stepPayload(
   timeZone: string,
 ): EventFields {
   switch (step) {
-    case 0:
+    case STEP.main:
       return {
         title: form.title.trim(),
         short_description: orNull(form.short_description),
         description: orNull(form.description),
         category: form.category,
       };
-    case 1:
+    case STEP.when:
       return {
-        is_online: form.is_online,
-        online_url: form.is_online ? orNull(form.online_url) : null,
-        locality_id: form.locality_id,
-        venue_id: form.is_online ? null : form.venue_id,
         sessions: form.sessions
           .map((s) => ({
             id: s.id,
@@ -208,7 +207,14 @@ export function stepPayload(
             } => s.starts_at !== null,
           ),
       };
-    case 2: {
+    case STEP.where:
+      return {
+        is_online: form.is_online,
+        online_url: form.is_online ? orNull(form.online_url) : null,
+        locality_id: form.locality_id,
+        venue_id: form.is_online ? null : form.venue_id,
+      };
+    case STEP.price: {
       const paid = form.price_type === "paid";
       return {
         price_type: form.price_type,
@@ -220,7 +226,7 @@ export function stepPayload(
         ticket_url: orNull(form.ticket_url),
       };
     }
-    case 3:
+    case STEP.cover:
       return {
         cover_media_id: form.cover_media_id,
         contacts: orNull(form.contacts),
@@ -243,17 +249,19 @@ export function stepErrors(
   timeZone = "UTC",
 ): string[] {
   const errors: string[] = [];
-  if (step === 0) {
+  if (step === STEP.main) {
     if (form.title.trim().length < 3)
       errors.push("Название — хотя бы 3 символа");
     if (!form.category) errors.push("Выбери категорию");
   }
-  if (step === 1) {
+  if (step === STEP.where) {
     if (form.is_online && !/^https:\/\/\S+$/.test(form.online_url.trim())) {
       errors.push("Ссылка на трансляцию должна начинаться с https://");
     }
     if (!form.is_online && form.locality_id === null)
       errors.push("Выбери населённый пункт");
+  }
+  if (step === STEP.when) {
     const starts = form.sessions.map((s) =>
       zonedInputToIso(s.starts, timeZone),
     );
@@ -268,7 +276,7 @@ export function stepErrors(
         errors.push(`Сеанс ${i + 1}: конец раньше начала`);
     });
   }
-  if (step === 2) {
+  if (step === STEP.price) {
     if (form.price_type === "unknown") errors.push("Укажи, платное ли событие");
     if (form.price_type === "paid") {
       const min = Number(form.price_min);
@@ -286,4 +294,65 @@ export function stepErrors(
     }
   }
   return errors;
+}
+
+/** Все ошибки формы по шагам до «Проверки»: номер первого шага с ошибкой или null. */
+export function firstInvalidStep(form: EventForm, now: Date = new Date(), timeZone = "UTC"): number | null {
+  for (let step = 0; step < STEP.review; step += 1)
+    if (stepErrors(step, form, now, timeZone).length > 0) return step;
+  return null;
+}
+
+/** На каком шаге правится поле из правил модерации (violation.field). */
+export function stepOfField(field: string): number {
+  if (["title", "description", "short_description", "category", "text"].includes(field)) return STEP.main;
+  if (field.startsWith("session") || field === "starts_at") return STEP.when;
+  if (["locality_id", "venue_id", "is_online", "online_url", "place"].includes(field)) return STEP.where;
+  if (field.startsWith("price") || ["age_rating", "pushkin_card", "ticket_url", "registration_required"].includes(field))
+    return STEP.price;
+  if (["cover_media_id", "contacts", "accessibility"].includes(field)) return STEP.cover;
+  return STEP.main;
+}
+
+/** Что распознал разбор анонса (ai_fields) — подписи для подсветки. */
+export const PARSED_LABELS: Record<string, string> = {
+  title: "название",
+  category: "категория",
+  price_type: "цена",
+  pushkin_card: "Пушкинская карта",
+  ticket_url: "ссылка на билеты",
+  contacts: "контакты",
+  sessions: "дата и время",
+  venue_id: "площадка",
+};
+
+/** Превью «как в ленте»: EventManage → EventCard. */
+export function manageToCard(event: EventManage): EventCard {
+  const sessions = event.sessions
+    .filter((s) => s.status !== "cancelled")
+    .sort((a, b) => a.starts_at.localeCompare(b.starts_at));
+  return {
+    id: event.id,
+    title: event.title,
+    short_description: event.short_description,
+    category: event.category,
+    cover_url: event.cover_url,
+    trust_tier: event.trust_tier,
+    is_demo: false,
+    org: event.organization_id
+      ? { id: event.organization_id, name: event.org_name ?? "", verified: event.org_verified }
+      : null,
+    venue: event.venue,
+    locality: event.locality_id ? { id: event.locality_id, name: event.locality_name ?? "" } : null,
+    timezone: event.timezone,
+    next_session: sessions[0] ?? null,
+    sessions_count: sessions.length,
+    distance_km: null,
+    price_type: event.price_type,
+    price_min: event.price_min,
+    price_max: event.price_max,
+    pushkin_card: event.pushkin_card,
+    age_rating: event.age_rating,
+    is_online: event.is_online,
+  };
 }

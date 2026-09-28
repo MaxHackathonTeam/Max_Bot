@@ -1,6 +1,6 @@
 """Раздел модератора: очередь, решения, отзыв верификации, аудит (§6, FR-ADM)."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
 
@@ -23,8 +23,12 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 @router.get("/queue", response_model=QueueOut, summary="Очередь модерации")
-async def queue(_admin: AdminDep, session: SessionDep) -> QueueOut:
-    return await admin_service.queue(session)
+async def queue(
+    _admin: AdminDep,
+    session: SessionDep,
+    kind: Annotated[Literal["new", "returned", "all"], Query(alias="filter")] = "all",
+) -> QueueOut:
+    return await admin_service.queue(session, kind=kind)
 
 
 @router.post("/events/{event_id}/decision", status_code=204, summary="Решение по событию")

@@ -141,7 +141,7 @@ class ReportOut(BaseModel):
 class EventDecisionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["approve", "reject", "hide"]
+    action: Literal["approve", "reject", "hide", "return"]
     reason: str | None = Field(default=None, max_length=1000)
 
 
@@ -174,6 +174,21 @@ class QueueEvent(BaseModel):
     reports: int
     next_starts_at: datetime | None
     updated_at: datetime
+    returned: bool = False
+
+
+class CheckViolation(BaseModel):
+    code: str
+    field: str
+    message: str
+    kind: str
+
+
+class CheckOut(BaseModel):
+    """Проверка правил до отправки: violations блокируют отправку, warnings — повод для проверки."""
+
+    violations: list[CheckViolation]
+    warnings: list[str]
 
 
 class QueueVerification(BaseModel):

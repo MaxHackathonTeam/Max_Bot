@@ -42,22 +42,29 @@ async def get_out(session: AsyncSession, venue_id: int) -> VenueOut | None:
 async def search(
     session: AsyncSession, user: User, q: str | None, org_id: int | None
 ) -> list[VenueOut]:
-    """Площадки организации (для участника) и найденные по названию или адресу."""
+    """Площадки организации (для участника) и найденные по названию или адресу.
+
+    Поиск не показывает площадки чужих организаций: выбрать их всё равно нельзя
+    (event_editor._check_refs), а в подсказке они только мешают.
+    """
     stmt = (
         select(Venue, Locality.name, lat_of(Venue.point), lon_of(Venue.point))
         .join(Locality, Locality.id == Venue.locality_id)
         .limit(SEARCH_LIMIT)
     )
+    mine = [org.id for org, _ in await orgs_service.list_mine(session, user)]
     conditions = []
     if org_id is not None:
         await orgs_service.require_member(session, org_id, user)
         conditions.append(Venue.org_id == org_id)
     if q and q.strip():
         pattern = f"%{q.strip()}%"
-        conditions.append(or_(Venue.name.ilike(pattern), Venue.address.ilike(pattern)))
+        conditions.append(
+            or_(Venue.name.ilike(pattern), Venue.address.ilike(pattern))
+            & or_(Venue.org_id.is_(None), Venue.org_id.in_(mine))
+        )
     if not conditions:
         # Без запроса — только площадки, созданные в организациях пользователя.
-        mine = [org.id for org, _ in await orgs_service.list_mine(session, user)]
         if not mine:
             return []
         conditions.append(Venue.org_id.in_(mine))
