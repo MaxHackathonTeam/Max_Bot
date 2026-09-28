@@ -111,9 +111,14 @@ class Event(IdMixin, TimestampMixin, Base):
 
 class EventSession(IdMixin, TimestampMixin, Base):
     __tablename__ = "event_sessions"
-    __table_args__ = (enum_check("status", SessionStatus),)
+    __table_args__ = (
+        enum_check("status", SessionStatus),
+        # Ближайший сеанс события в ленте (LATERAL … ORDER BY starts_at LIMIT 1): один
+        # короткий index scan вместо BitmapAnd с индексом по starts_at на каждое событие.
+        Index("ix_event_sessions_event_id_starts_at", "event_id", "starts_at"),
+    )
 
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(
