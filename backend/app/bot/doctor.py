@@ -16,7 +16,7 @@ from typing import Any
 
 from redis.asyncio import Redis
 
-from app.bot.subscriptions import check_webhook, config_problems, load_status
+from app.bot.subscriptions import check_webhook, config_problems, load_status, sync_commands
 from app.core.config import Settings, get_settings
 from app.integrations.max import MaxClient
 from app.integrations.max.client import UPDATE_TYPES
@@ -118,6 +118,9 @@ async def main(argv: list[str] | None = None) -> int:
     try:
         if args.fix:
             print(f"Пересоздаю подписку: {await check_webhook(settings, redis, force=True)}")
+            if client is not None:
+                synced = await sync_commands(client)
+                print(f"Команды бота: {'обновлены' if synced else 'не удалось обновить'}")
         problems = await diagnose(settings, client, redis)
     finally:
         if client is not None:

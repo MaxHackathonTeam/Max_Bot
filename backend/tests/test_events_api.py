@@ -1,5 +1,6 @@
 """GET /events, GET /events/{id}, «Пойду» — с настоящей БД (TEST_DATABASE_URL)."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -314,3 +315,42 @@ async def test_save_flow(db_client: httpx.AsyncClient, db_session: AsyncSession)
         f"/api/v1/events/{event.id}/save", headers=headers, json={"session_id": 10**9}
     )
     assert r.status_code == 409
+
+
+async def test_nearest_events_with_distance(
+    db_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    lat, lon = random_area()
+    here = await make_locality(db_session, "Пустое", lat, lon)
+    tag = uuid.uuid4().hex[:6]
+    near = await make_locality(db_session, "Ближнее", *shift_north(lat, lon, 60))
+    far = await make_locality(db_session, "Дальнее", *shift_north(lat, lon, 120))
+    await make_event(db_session, far, title=f"Дальнее {tag}", starts=[in_hours(24)])
+    await make_event(db_session, near, title=f"Ближнее {tag}", starts=[in_hours(48)])
+    await make_event(
+        db_session,
+        near,
+        title=f"Соседское {tag}",
+        trust_tier=TrustTier.community,
+        starts=[in_hours(24)],
+    )
+    await db_session.commit()
+
+    r = await db_client.get("/api/v1/events/nearest", params={"locality_id": here.id})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["next_cursor"] is None
+    mine = [i for i in body["items"] if i["title"].endswith(tag)]
+    # От близких к дальним, с расстоянием; ленты не смешиваются.
+    assert [i["title"] for i in mine] == [f"Ближнее {tag}", f"Дальнее {tag}"]
+    assert 55 < mine[0]["distance_km"] < 65 and 115 < mine[1]["distance_km"] < 125
+
+    r = await db_client.get(
+        "/api/v1/events/nearest", params={"lat": lat, "lon": lon, "tier": "community"}
+    )
+    assert [i["title"] for i in r.json()["items"] if i["title"].endswith(tag)] == [
+        f"Соседское {tag}"
+    ]
+    assert (await db_client.get("/api/v1/events/nearest")).status_code == 400
+    r = await db_client.get("/api/v1/events/nearest", params={"locality_id": here.id, "limit": 11})
+    assert r.status_code == 422

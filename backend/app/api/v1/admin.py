@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import AdminDep, NotifierDep, SessionDep
 from app.schemas.manage import (
+    AdminEventCard,
     AuditPage,
     EventDecisionIn,
     QueueOut,
@@ -25,6 +26,13 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 @router.get("/queue", response_model=QueueOut, summary="Очередь модерации")
 async def queue(_admin: AdminDep, session: SessionDep) -> QueueOut:
     return await admin_service.queue(session)
+
+
+@router.get(
+    "/events/{event_id}", response_model=AdminEventCard, summary="Карточка события для модератора"
+)
+async def event_card(event_id: int, _admin: AdminDep, session: SessionDep) -> AdminEventCard:
+    return await admin_service.event_card(session, event_id)
 
 
 @router.post("/events/{event_id}/decision", status_code=204, summary="Решение по событию")

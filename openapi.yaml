@@ -1126,6 +1126,118 @@
         }
       }
     },
+    "/api/v1/events/nearest": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Ближайшие события с расстоянием",
+        "description": "Будущие события в пределах 500 км от пункта или точки, от близких к дальним; distance_km заполнен. Для пустой ленты «рядом ничего нет». Без пагинации: next_cursor всегда null.",
+        "operationId": "nearest_events_api_v1_events_nearest_get",
+        "parameters": [
+          {
+            "name": "locality_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Locality Id"
+            }
+          },
+          {
+            "name": "lat",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 90,
+                  "minimum": -90
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lat"
+            }
+          },
+          {
+            "name": "lon",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 180,
+                  "minimum": -180
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lon"
+            }
+          },
+          {
+            "name": "tier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "official",
+                "community"
+              ],
+              "type": "string",
+              "default": "official",
+              "title": "Tier"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10,
+              "minimum": 1,
+              "default": 5,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/{event_id}": {
       "get": {
         "tags": [
@@ -2779,6 +2891,53 @@
         ]
       }
     },
+    "/api/v1/admin/events/{event_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Карточка события для модератора",
+        "operationId": "event_card_api_v1_admin_events__event_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminEventCard"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/events/{event_id}/decision": {
       "post": {
         "tags": [
@@ -3055,6 +3214,91 @@
         "type": "object",
         "title": "Accessibility"
       },
+      "AdminAuthor": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "max_user_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max User Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "max_user_id"
+        ],
+        "title": "AdminAuthor"
+      },
+      "AdminEventCard": {
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/EventManage"
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminAuthor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flags": {
+            "items": {
+              "$ref": "#/components/schemas/RuleFlag"
+            },
+            "type": "array",
+            "title": "Flags"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionItem"
+            },
+            "type": "array",
+            "title": "Decisions"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/AuditItem"
+            },
+            "type": "array",
+            "title": "History"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event",
+          "author",
+          "flags",
+          "decisions",
+          "history"
+        ],
+        "title": "AdminEventCard",
+        "description": "Карточка модератора: событие, автор, флаги правил, решения и журнал (новые сверху)."
+      },
       "AuditItem": {
         "properties": {
           "id": {
@@ -3280,6 +3524,51 @@
           "docs"
         ],
         "title": "ConsentsIn"
+      },
+      "DecisionItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "actor_type": {
+            "type": "string",
+            "title": "Actor Type"
+          },
+          "actor_user_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor User Id"
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict"
+          },
+          "reasons": {
+            "title": "Reasons"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "actor_type",
+          "actor_user_id",
+          "verdict",
+          "reasons"
+        ],
+        "title": "DecisionItem"
       },
       "DraftIn": {
         "properties": {
@@ -6415,6 +6704,40 @@
           "events_moved"
         ],
         "title": "RevokeOut"
+      },
+      "RuleFlag": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "form",
+              "content",
+              "signal"
+            ],
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "field",
+          "message",
+          "kind"
+        ],
+        "title": "RuleFlag",
+        "description": "Правила §6: form — не хватает данных, content — запрещённое содержимое (отказ),\nsignal — признак подозрительности (событие ждёт модератора)."
       },
       "SaveIn": {
         "properties": {

@@ -2,9 +2,10 @@
 
 Сервисы не знают, как доставляется сообщение: из API оно ставится в очередь,
 из воркера и бота — отправляется сразу (app.bot.notify.BotNotifier).
-Полноценные уведомления с дедупликацией и тихими часами — этап 4.
+Из очереди — с повторами (workers.settings.send_user_message) и дедупликацией по job_id.
 """
 
+import hashlib
 from typing import Protocol
 
 from app.core.jobs import SEND_USER_MESSAGE, JobQueue
@@ -21,7 +22,9 @@ class QueuedNotifier:
         self._jobs = jobs
 
     async def send(self, user_id: int, text: str, deeplink: str | None = None) -> None:
-        await self._jobs.enqueue(SEND_USER_MESSAGE, user_id, text, deeplink)
+        # Одинаковое сообщение тому же пользователю, пока задача жива, — одно (arq job_id).
+        digest = hashlib.sha256(f"{user_id}\n{deeplink}\n{text}".encode()).hexdigest()[:24]
+        await self._jobs.enqueue(SEND_USER_MESSAGE, user_id, text, deeplink, job_id=f"msg:{digest}")
 
 
 class MemoryNotifier:

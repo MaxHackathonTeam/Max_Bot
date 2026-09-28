@@ -207,3 +207,38 @@ class AuditItem(BaseModel):
 class AuditPage(BaseModel):
     items: list[AuditItem]
     next_before_id: int | None
+
+
+class AdminAuthor(BaseModel):
+    id: int
+    name: str | None
+    max_user_id: int | None
+
+
+class RuleFlag(BaseModel):
+    """Правила §6: form — не хватает данных, content — запрещённое содержимое (отказ),
+    signal — признак подозрительности (событие ждёт модератора)."""
+
+    code: str
+    field: str
+    message: str
+    kind: Literal["form", "content", "signal"]
+
+
+class DecisionItem(BaseModel):
+    id: int
+    created_at: datetime
+    actor_type: str
+    actor_user_id: int | None
+    verdict: str
+    reasons: Any
+
+
+class AdminEventCard(BaseModel):
+    """Карточка модератора: событие, автор, флаги правил, решения и журнал (новые сверху)."""
+
+    event: EventManage
+    author: AdminAuthor | None
+    flags: list[RuleFlag]
+    decisions: list[DecisionItem]
+    history: list[AuditItem]

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 import structlog
 from redis.asyncio import Redis
 
+from app.bot import texts
 from app.core.config import Settings
 from app.integrations.max import MaxClient
 from app.integrations.max.client import UPDATE_TYPES
@@ -134,3 +135,14 @@ async def drop_webhooks(client: MaxClient) -> int:
     if urls:
         log.warning("bot_webhooks_removed_for_polling", count=len(urls))
     return len(urls)
+
+
+async def sync_commands(client: MaxClient) -> bool:
+    """Меню команд в клиенте MAX (PATCH /me/commands). Ошибка не мешает боту работать."""
+    try:
+        await client.set_commands(list(texts.COMMANDS))
+    except Exception as exc:
+        log.warning("bot_commands_not_synced", error=type(exc).__name__)
+        return False
+    log.info("bot_commands_synced", count=len(texts.COMMANDS))
+    return True

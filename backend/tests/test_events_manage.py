@@ -312,3 +312,61 @@ async def test_media_upload_and_cover(
     assert event["cover_url"] == media["url"]
     served = await db_client.get(media["url"])
     assert served.status_code == 200 and served.content[:4] == b"RIFF"
+
+
+async def test_admin_card_and_moderation_rights(
+    db_app: FastAPI, db_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    _, venue_id = await _place(db_session)
+    author, author_me = await login_as(db_client)
+    stranger, _ = await login_as(db_client)
+    admin, _ = await login_as(db_client, 777)
+    body = _body(venue_id, title="ВЕЧЕР НАРОДНОЙ ПЕСНИ", description="Приходите!!!")
+    event = await _create(db_client, author, body)
+    await db_client.post(f"/api/v1/events/{event['id']}/submit", headers=author)
+    assert await _moderate(db_app, event["id"]) == "pending"
+
+    card_url = f"/api/v1/admin/events/{event['id']}"
+    decision = f"{card_url}/decision"
+    # Карточка, очередь и решения — только администраторам из ADMIN_MAX_USER_IDS.
+    assert (await db_client.get(card_url)).status_code == 401
+    for headers in (author, stranger):
+        assert (await db_client.get(card_url, headers=headers)).status_code == 403
+        assert (await db_client.get("/api/v1/admin/queue", headers=headers)).status_code == 403
+        r = await db_client.post(
+            decision, json={"action": "reject", "reason": "x"}, headers=headers
+        )
+        assert r.status_code == 403
+    assert (await db_client.get("/api/v1/admin/events/0", headers=admin)).status_code == 404
+
+    r = await db_client.get(card_url, headers=admin)
+    assert r.status_code == 200, r.text
+    card = r.json()
+    assert card["event"]["id"] == event["id"] and card["event"]["status"] == "pending"
+    assert card["author"] == {
+        "id": author_me["id"],
+        "name": author_me["first_name"],
+        "max_user_id": author_me["max_user_id"],
+    }
+    signals = [f["message"] for f in card["flags"] if f["kind"] == "signal"]
+    assert "название заглавными буквами" in signals
+    assert [d["actor_type"] for d in card["decisions"]] == ["rules"]
+    actions = [h["action"] for h in card["history"]]
+    assert "event.create" in actions
+    assert [h["id"] for h in card["history"]] == sorted(
+        (h["id"] for h in card["history"]), reverse=True
+    )
+
+    # Отказ — только с причиной; причина видна автору и в истории решений.
+    r = await db_client.post(decision, json={"action": "reject"}, headers=admin)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "reason_required"
+    r = await db_client.post(
+        decision, json={"action": "reject", "reason": "Уточни дату"}, headers=admin
+    )
+    assert r.status_code == 204
+    card = (await db_client.get(card_url, headers=admin)).json()
+    assert card["event"]["status"] == "rejected"
+    assert card["event"]["moderation_reason"] == "Уточни дату"
+    assert [d["actor_type"] for d in card["decisions"]] == ["admin", "rules"]
+    mine = (await db_client.get("/api/v1/me/events", headers=author)).json()
+    assert [(e["id"], e["status"]) for e in mine] == [(event["id"], "rejected")]

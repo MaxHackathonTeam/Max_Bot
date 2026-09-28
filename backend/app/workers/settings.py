@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 
 import structlog
+from arq import Retry
 from arq.connections import RedisSettings
 from arq.cron import cron
 from redis.asyncio import Redis
@@ -12,8 +13,8 @@ from sqlalchemy import select
 from app.bot import keyboards, texts
 from app.bot.dispatcher import BotContext, handle_update
 from app.bot.fsm import RedisStateStore
-from app.bot.notify import BotNotifier
-from app.bot.subscriptions import check_webhook
+from app.bot.notify import BotNotifier, notify_admins_new_event
+from app.bot.subscriptions import check_webhook, sync_commands
 from app.core.config import get_settings
 from app.core.jobs import ArqJobQueue
 from app.core.logging import configure_logging
@@ -25,10 +26,15 @@ from app.models.users import User
 from app.services import moderation as moderation_service
 from app.services import notifications as notifications_service
 from app.services import verification as verification_service
+from app.services.notify import QueuedNotifier
 
 _settings = get_settings()
 configure_logging(_settings.log_level)
 log = structlog.get_logger(__name__)
+
+# Сообщение в бот: до SEND_TRIES попыток с растущей паузой (MAX недоступен, 429, 5xx).
+SEND_TRIES = 5
+SEND_BACKOFF_S = 15
 
 
 # Для `arq --custom-log-dict`: не даём arq ставить свой текстовый handler, пишем через root (JSON).
@@ -62,7 +68,12 @@ async def ensure_bot_webhook(ctx: dict[str, Any]) -> str | None:
 async def moderate_event(ctx: dict[str, Any], event_id: int, _attempt: int = 0) -> str | None:
     """`_attempt` — для задач, поставленных прежними версиями в очередь; не используется."""
     async with ctx["db"]() as session:
-        return await moderation_service.moderate_event(session, event_id, notifier=_notifier(ctx))
+        status = await moderation_service.moderate_event(session, event_id, notifier=_notifier(ctx))
+    bot: BotContext | None = ctx.get("bot")
+    if status == "pending" and bot is not None:
+        # Правила не пропустили автоматически — заявка ждёт модератора.
+        await notify_admins_new_event(ctx["db"], bot.max, _settings, event_id)
+    return status
 
 
 async def check_verification(ctx: dict[str, Any], request_id: int) -> str | None:
@@ -78,11 +89,20 @@ async def check_verification(ctx: dict[str, Any], request_id: int) -> str | None
 async def send_user_message(
     ctx: dict[str, Any], user_id: int, text: str, deeplink: str | None = None
 ) -> None:
+    """Сообщение из очереди (QueuedNotifier). Гостям не уходит (BotNotifier их пропускает)."""
     notifier: BotNotifier | None = ctx.get("notifier")
     if notifier is None:
         log.warning("user_message_dropped", reason="MAX_BOT_TOKEN не задан")
         return
-    await notifier.send(user_id, text, deeplink)
+    try:
+        await notifier.send(user_id, text, deeplink)
+    except Exception as exc:
+        attempt = int(ctx.get("job_try") or 1)
+        if attempt >= SEND_TRIES:
+            log.error("user_message_failed", user_id=user_id, error=type(exc).__name__)
+            return
+        log.warning("user_message_retry", user_id=user_id, attempt=attempt)
+        raise Retry(defer=SEND_BACKOFF_S * attempt) from exc
 
 
 async def request_phone(ctx: dict[str, Any], user_id: int, org_id: int) -> None:
@@ -218,16 +238,18 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["jobs"] = ArqJobQueue(_settings.redis_url)
     client = client_from_settings(_settings)
     if client is not None:
-        notifier = BotNotifier(db, client, _settings.max_bot_username)
-        ctx["notifier"] = notifier
+        # Воркер доставляет сам; бот ставит сообщения другим в очередь — с повторами.
+        ctx["notifier"] = BotNotifier(db, client, _settings.max_bot_username)
         ctx["bot"] = BotContext(
             settings=_settings,
             db=db,
             max=client,
             states=RedisStateStore(redis),
             redis=redis,
-            notifier=notifier,
+            notifier=QueuedNotifier(ctx["jobs"]),
+            jobs=ctx["jobs"],
         )
+        await sync_commands(client)
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
