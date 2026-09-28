@@ -1,8 +1,9 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { ChevronDown, CreditCard, Search, SearchX, SlidersHorizontal } from "lucide-react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { Baby, ChevronDown, CirclePlus, CreditCard, Search, SearchX, SlidersHorizontal } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { fetchEvents, type Me, type Radius, type Tier } from "../api/client";
+import { useRequireLogin } from "../app/login";
 import { useLocality, useSetLocality } from "../app/profile";
 import { EventCardSkeleton, EventCardView } from "../components/EventCardView";
 import { FilterPanel } from "../components/FilterPanel";
@@ -30,9 +31,83 @@ import { ErrorBlock } from "./Status";
 
 const TABS: { value: Tier; label: string }[] = [
   { value: "official", label: "Официальные" },
-  { value: "community", label: "От сообщества" },
+  { value: "community", label: "От жителей" },
 ];
 const MAX_RADIUS: Radius = 50;
+const TAB_LABEL: Record<Tier, string> = { official: "Официальные", community: "От жителей" };
+const ADD_REASON = "Чтобы добавить афишу, войди через MAX.";
+const NEARBY_LIMIT = 4;
+
+/** Фильтры не заданы — пустая выдача значит «в пункте ничего нет», а не «фильтры слишком строгие». */
+function isPlain(f: FeedFilters): boolean {
+  return !f.date && !f.free && !f.kids && !f.pushkin && !f.q && sheetFilterCount({ ...f, radius: null }) === 0;
+}
+
+function clearFilters(f: FeedFilters): FeedFilters {
+  return { ...resetPanel(f), radius: f.radius, date: null, free: false, kids: false, pushkin: false, q: "" };
+}
+
+function AddFirstButton() {
+  const navigate = useNavigate();
+  const requireLogin = useRequireLogin();
+  return (
+    <Button
+      variant="primary"
+      icon={<CirclePlus size={18} aria-hidden />}
+      onClick={() => requireLogin({ reason: ADD_REASON, next: "/new" }) && navigate("/new")}
+    >
+      Добавить первое событие
+    </Button>
+  );
+}
+
+/**
+ * «Рядом»: ближайшие события в пределах 50 км, по расстоянию, в той же вкладке.
+ * Вкладки по-прежнему не смешиваются.
+ */
+function Nearby({
+  filters,
+  localityId,
+  timeZone,
+  onWiden,
+}: {
+  filters: FeedFilters;
+  localityId: number;
+  timeZone?: string;
+  onWiden: () => void;
+}) {
+  const query = {
+    ...toEventQuery({ ...filters, sort: "distance", radius: MAX_RADIUS }, localityId, MAX_RADIUS, timeZone),
+    limit: NEARBY_LIMIT,
+  };
+  const nearby = useQuery({ queryKey: ["events", "nearby", query], queryFn: () => fetchEvents(query) });
+  if (nearby.isPending)
+    return (
+      <section className="stack" aria-busy aria-label="Рядом">
+        <h2 className="h3">Рядом</h2>
+        <div className="feed__grid">
+          <EventCardSkeleton />
+          <EventCardSkeleton />
+        </div>
+      </section>
+    );
+  if (nearby.isError || nearby.data.items.length === 0) return null;
+  return (
+    <section className="stack" aria-labelledby="nearby-title">
+      <h2 className="h3" id="nearby-title">
+        Рядом, до {MAX_RADIUS} км
+      </h2>
+      <div className="feed__grid">
+        {nearby.data.items.map((card) => (
+          <EventCardView key={card.id} card={card} />
+        ))}
+      </div>
+      <Button variant="secondary" onClick={onWiden}>
+        Показать всё в радиусе {MAX_RADIUS} км
+      </Button>
+    </section>
+  );
+}
 
 export function FeedSkeleton() {
   return (
@@ -80,7 +155,7 @@ export function FeedPage({ me, localityId, radius: baseRadius }: { me: Me | null
   }, [q]);
 
   const radius = filters.radius ?? baseRadius;
-  const query = toEventQuery(filters, localityId, baseRadius);
+  const query = toEventQuery(filters, localityId, baseRadius, locality.data?.timezone);
   const feed = useInfiniteQuery({
     queryKey: ["events", query],
     queryFn: ({ pageParam }) => fetchEvents({ ...query, cursor: pageParam }),
@@ -141,8 +216,12 @@ export function FeedPage({ me, localityId, radius: baseRadius }: { me: Me | null
             {dateChip("today", "Сегодня")}
             {dateChip("tomorrow", "Завтра")}
             {dateChip("weekend", "Выходные")}
+            {dateChip("week", "Неделя")}
             <Chip pressed={filters.free} onClick={() => toggle({ free: !filters.free })}>
               Бесплатно
+            </Chip>
+            <Chip pressed={filters.kids} icon={<Baby size={15} aria-hidden />} onClick={() => toggle({ kids: !filters.kids })}>
+              Для детей
             </Chip>
             <Chip
               pressed={filters.pushkin}
@@ -174,23 +253,27 @@ export function FeedPage({ me, localityId, radius: baseRadius }: { me: Me | null
           {feed.isError && <ErrorBlock message={feed.error.message} onRetry={() => void feed.refetch()} />}
 
           {feed.isSuccess && items.length === 0 && (
-            <div data-testid="feed-empty">
-              <EmptyState
-                icon={<SearchX size={28} aria-hidden />}
-                title={`В радиусе ${radius} км ничего не нашлось`}
-                text={
-                  radius < MAX_RADIUS
-                    ? "Можно поискать чуть дальше."
-                    : `Попробуй убрать фильтры или загляни на вкладку «${filters.tier === "official" ? "От сообщества" : "Официальные"}».`
-                }
-                action={
-                  radius < MAX_RADIUS && (
-                    <Button variant="primary" onClick={() => toggle({ radius: MAX_RADIUS })}>
-                      Расширить до {MAX_RADIUS} км
+            <div data-testid="feed-empty" className="stack stack--loose">
+              {isPlain(filters) ? (
+                <EmptyState
+                  icon={<SearchX size={28} aria-hidden />}
+                  title="Здесь пока нет событий"
+                  text={`В радиусе ${radius} км во вкладке «${TAB_LABEL[filters.tier]}» пусто. Расскажи о своём — это займёт пару минут.`}
+                  action={<AddFirstButton />}
+                />
+              ) : (
+                <EmptyState
+                  icon={<SearchX size={28} aria-hidden />}
+                  title="С такими фильтрами ничего нет"
+                  text="Попробуй убрать фильтры или выбрать другие даты."
+                  action={
+                    <Button variant="secondary" onClick={() => setFilters(clearFilters(filters))}>
+                      Сбросить фильтры
                     </Button>
-                  )
-                }
-              />
+                  }
+                />
+              )}
+              {radius < MAX_RADIUS && <Nearby filters={filters} localityId={localityId} timeZone={locality.data?.timezone} onWiden={() => toggle({ radius: MAX_RADIUS })} />}
             </div>
           )}
 

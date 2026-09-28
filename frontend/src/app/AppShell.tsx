@@ -1,15 +1,20 @@
-import { Bookmark, Building, CalendarDays, ChevronLeft, UserRound } from "lucide-react";
-import type { ReactNode } from "react";
+import { Bookmark, Building, CalendarDays, ChevronLeft, CirclePlus, UserRound } from "lucide-react";
+import type { MouseEvent, ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { ProfileMenu } from "../components/ProfileMenu";
 import { IconButton } from "../ui/Button";
+import { useRequireLogin } from "./login";
 import { useSession } from "./session";
 
+// top: false — на десктопе пункт заменяет меню профиля в шапке.
 const NAV = [
-  { to: "/", label: "Афиша", icon: CalendarDays, end: true },
-  { to: "/saved", label: "Пойду", icon: Bookmark, end: false },
-  { to: "/org/0", label: "Кабинет", icon: Building, end: false },
-  { to: "/settings", label: "Профиль", icon: UserRound, end: false },
+  { to: "/", label: "Афиша", icon: CalendarDays, end: true, top: true },
+  { to: "/saved", label: "Пойду", icon: Bookmark, end: false, top: true },
+  { to: "/new", label: "Добавить", icon: CirclePlus, end: false, top: true },
+  { to: "/org/0", label: "Кабинет", icon: Building, end: false, top: true },
+  { to: "/settings", label: "Профиль", icon: UserRound, end: false, top: false },
 ];
+const ADD_REASON = "Чтобы добавить афишу, войди через MAX.";
 const TAB_ROOTS = new Set(NAV.map((item) => item.to));
 
 /** Шапка, навигация (снизу на телефоне, в шапке на десктопе) и своя «Назад» вне MAX. */
@@ -19,6 +24,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   // В MAX «Назад» системная (useBackButton), в браузере — своя кнопка в шапке.
   const showBack = !inMax && !TAB_ROOTS.has(pathname);
+  const requireLogin = useRequireLogin();
+  // «Добавить» гостю сначала объясняет, зачем вход, и после входа ведёт на /new.
+  const guard = (to: string) => (event: MouseEvent) => {
+    if (to === "/new" && !requireLogin({ reason: ADD_REASON, next: "/new" })) event.preventDefault();
+  };
 
   const back = () => {
     const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
@@ -46,13 +56,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Link>
           <div className="topbar__end">
             <nav className="topnav" aria-label="Разделы">
-              {NAV.map(({ to, label, icon: Icon, end }) => (
-                <NavLink key={to} to={to} end={end}>
+              {NAV.filter((item) => item.top).map(({ to, label, icon: Icon, end }) => (
+                <NavLink key={to} to={to} end={end} onClick={guard(to)}>
                   <Icon size={18} aria-hidden />
                   {label}
                 </NavLink>
               ))}
             </nav>
+            <ProfileMenu />
           </div>
         </div>
       </header>
@@ -61,7 +72,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
       <nav className="tabbar" aria-label="Разделы">
         {NAV.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end}>
+          <NavLink key={to} to={to} end={end} onClick={guard(to)}>
             <Icon size={22} aria-hidden />
             {label}
           </NavLink>

@@ -1682,6 +1682,53 @@
         }
       }
     },
+    "/api/v1/events/{event_id}/check": {
+      "post": {
+        "tags": [
+          "events"
+        ],
+        "summary": "Проверить перед отправкой",
+        "operationId": "check_event_api_v1_events__event_id__check_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/{event_id}/cancel": {
       "post": {
         "tags": [
@@ -2872,6 +2919,28 @@
         ],
         "summary": "Очередь модерации",
         "operationId": "queue_api_v1_admin_queue_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "new",
+                "returned",
+                "all"
+              ],
+              "type": "string",
+              "default": "all",
+              "title": "Filter"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2882,13 +2951,18 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
+        }
       }
     },
     "/api/v1/admin/events/{event_id}": {
@@ -3461,6 +3535,59 @@
           "emoji"
         ],
         "title": "CategoryOut"
+      },
+      "CheckOut": {
+        "properties": {
+          "violations": {
+            "items": {
+              "$ref": "#/components/schemas/CheckViolation"
+            },
+            "type": "array",
+            "title": "Violations"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "violations",
+          "warnings"
+        ],
+        "title": "CheckOut",
+        "description": "Проверка правил до отправки: violations блокируют отправку, warnings — повод для проверки."
+      },
+      "CheckViolation": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "field",
+          "message",
+          "kind"
+        ],
+        "title": "CheckViolation"
       },
       "ConsentDoc": {
         "type": "string",
@@ -4064,7 +4191,8 @@
             "enum": [
               "approve",
               "reject",
-              "hide"
+              "hide",
+              "return"
             ],
             "title": "Action"
           },
@@ -6488,6 +6616,11 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "returned": {
+            "type": "boolean",
+            "title": "Returned",
+            "default": false
           }
         },
         "type": "object",

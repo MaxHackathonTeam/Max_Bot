@@ -22,7 +22,15 @@ from app.models.orgs import Organization
 from app.models.users import User
 from app.moderation import rules
 from app.schemas.events import SessionOut, VenueBrief
-from app.schemas.manage import EventCreate, EventFields, EventManage, MyEventItem, SessionIn
+from app.schemas.manage import (
+    CheckOut,
+    CheckViolation,
+    EventCreate,
+    EventFields,
+    EventManage,
+    MyEventItem,
+    SessionIn,
+)
 from app.services import audit
 from app.services import media as media_service
 from app.services import moderation as moderation_service
@@ -368,7 +376,7 @@ async def _check_limits(session: AsyncSession, user: User, event: Event, digest:
     if (active or 0) >= COMMUNITY_ACTIVE_LIMIT:
         raise AppError(
             "limit_exceeded",
-            f"В «От сообщества» можно держать не больше {COMMUNITY_ACTIVE_LIMIT} активных событий",
+            f"В «От жителей» можно держать не больше {COMMUNITY_ACTIVE_LIMIT} активных событий",
             status_code=429,
         )
 
@@ -395,6 +403,22 @@ async def _moderate(
         )
         return False
     return True
+
+
+async def precheck(session: AsyncSession, user: User, event_id: int) -> CheckOut:
+    """Правила до отправки — те же, что в submit, но без изменений в БД."""
+    event = await _require_manage(session, user, event_id)
+    sessions = await _sessions(session, event.id)
+    data = _rules_data(event, sessions, None)
+    violations = _required(event, sessions) + rules.check(data, utcnow())
+    _, warnings = rules.score(data)
+    return CheckOut(
+        violations=[
+            CheckViolation(code=v.code, field=v.field, message=v.message, kind=v.kind)
+            for v in violations
+        ],
+        warnings=warnings,
+    )
 
 
 async def _after_rules_rejected(session: AsyncSession, notifier: Notifier, event: Event) -> None:

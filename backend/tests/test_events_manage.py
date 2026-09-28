@@ -17,7 +17,7 @@ from app.models.system import ModerationDecision
 from app.services import moderation
 from app.services.events import utcnow
 from app.services.notify import MemoryNotifier
-from tests.factories import make_locality, make_venue, random_area
+from tests.factories import make_locality, make_org, make_venue, random_area
 from tests.helpers import login_as
 
 ORG_CONSENTS = ("terms", "privacy", "org_pd")
@@ -370,3 +370,67 @@ async def test_admin_card_and_moderation_rights(
     assert [d["actor_type"] for d in card["decisions"]] == ["admin", "rules"]
     mine = (await db_client.get("/api/v1/me/events", headers=author)).json()
     assert [(e["id"], e["status"]) for e in mine] == [(event["id"], "rejected")]
+async def test_precheck_return_and_queue_filter(
+    db_app: FastAPI, db_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    _, venue_id = await _place(db_session)
+    author, _ = await login_as(db_client)
+    body = _body(venue_id, title="ВЕЧЕР НАРОДНОЙ ПЕСНИ", description="Звоните +7 900 123-45-67")
+    event = await _create(db_client, author, body)
+    url = f"/api/v1/events/{event['id']}"
+
+    # Проверка до отправки ничего не меняет и показывает те же правила, что submit.
+    check = (await db_client.post(f"{url}/check", headers=author)).json()
+    assert "contacts_in_text" in {v["code"] for v in check["violations"]}
+    assert "название заглавными буквами" in check["warnings"]
+    admin, _ = await login_as(db_client, 777)
+    assert (await db_client.post(f"{url}/check", headers=admin)).status_code == 403
+
+    await db_client.patch(url, json={"description": "Приходите всей семьёй!!!"}, headers=author)
+    await db_client.post(f"{url}/submit", headers=author)
+    assert await _moderate(db_app, event["id"]) == "pending"
+
+    def ids(queue: httpx.Response) -> list[int]:
+        return [e["id"] for e in queue.json()["events"]]
+
+    queue_url = "/api/v1/admin/queue"
+    assert event["id"] in ids(await db_client.get(f"{queue_url}?filter=new", headers=admin))
+    assert event["id"] not in ids(
+        await db_client.get(f"{queue_url}?filter=returned", headers=admin)
+    )
+
+    decision = f"/api/v1/admin/events/{event['id']}/decision"
+    r = await db_client.post(decision, json={"action": "return"}, headers=admin)
+    assert r.status_code == 422
+    r = await db_client.post(
+        decision, json={"action": "return", "reason": "Добавь адрес"}, headers=admin
+    )
+    assert r.status_code == 204
+    manage = (await db_client.get(f"{url}/manage", headers=author)).json()
+    assert manage["status"] == "draft" and manage["moderation_reason"] == "Добавь адрес"
+    sent = [str(j.args) for j in db_app.state.jobs.jobs]
+    assert any("на доработку" in args for args in sent)
+
+    # Повторная отправка — в фильтре «возвращённые».
+    await db_client.post(f"{url}/submit", headers=author)
+    await _moderate(db_app, event["id"])
+    returned = await db_client.get(f"{queue_url}?filter=returned", headers=admin)
+    assert event["id"] in ids(returned)
+    assert event["id"] not in ids(await db_client.get(f"{queue_url}?filter=new", headers=admin))
+
+
+async def test_venue_search_hides_foreign_org_venues(
+    db_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    lat, lon = random_area()
+    locality = await make_locality(db_session, "Площадочное", lat, lon)
+    await make_venue(db_session, locality, lat, lon, name="Сельский клуб общий")
+    foreign = await make_venue(db_session, locality, lat, lon, name="Сельский клуб чужой")
+    foreign.org_id = (await make_org(db_session)).id
+    await db_session.commit()
+    author, _ = await login_as(db_client)
+
+    r = await db_client.get("/api/v1/venues", params={"q": "Сельский клуб"}, headers=author)
+    assert r.status_code == 200
+    # Чужую площадку выбрать нельзя (_check_refs), поэтому поиск её не предлагает.
+    assert [v["name"] for v in r.json()] == ["Сельский клуб общий"]

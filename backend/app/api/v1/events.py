@@ -8,7 +8,14 @@ from fastapi import APIRouter, Query, Request, Response
 from app.api.deps import AuthDep, JobsDep, NotifierDep, OptionalAuthDep, SessionDep, SettingsDep
 from app.core.errors import AppError
 from app.schemas.events import EventDetail, EventPage, SaveIn, SaveOut
-from app.schemas.manage import EventCreate, EventManage, EventPatch, ReportIn, ReportOut
+from app.schemas.manage import (
+    CheckOut,
+    EventCreate,
+    EventManage,
+    EventPatch,
+    ReportIn,
+    ReportOut,
+)
 from app.services import analytics, event_editor
 from app.services import events as events_service
 from app.services import moderation as moderation_service
@@ -213,6 +220,11 @@ async def submit_event(
 ) -> EventManage:
     await event_editor.submit(session, auth.user, event_id, jobs=jobs, notifier=notifier)
     return await event_editor.manage_view(session, auth.user, event_id)
+
+
+@router.post("/{event_id}/check", response_model=CheckOut, summary="Проверить перед отправкой")
+async def check_event(event_id: int, auth: AuthDep, session: SessionDep) -> CheckOut:
+    return await event_editor.precheck(session, auth.user, event_id)
 
 
 @router.post("/{event_id}/cancel", response_model=EventManage, summary="Отменить событие")

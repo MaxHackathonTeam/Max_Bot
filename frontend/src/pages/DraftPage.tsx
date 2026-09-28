@@ -14,18 +14,22 @@ import {
   Rocket,
   Search,
   Send,
+  Sparkles,
   Trash,
+  TriangleAlert,
   X,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { Me } from "../api/client";
 import {
   cancelEvent,
+  checkEvent,
   createEvent,
   createVenue,
   deleteEvent,
   fetchManage,
+  fetchMyOrgs,
   patchEvent,
   searchVenues,
   STATUS_LABELS,
@@ -36,12 +40,27 @@ import {
 } from "../api/organizer";
 import { hasConsent, useCategories } from "../app/profile";
 import { ConsentPrompt } from "../components/ConsentPrompt";
+import { EventCardView } from "../components/EventCardView";
 import { FormErrors } from "../components/FormErrors";
 import { LocalityPicker } from "../components/LocalityPicker";
 import { RequireMax } from "../components/RequireMax";
 import { useDebounced } from "../hooks/useDebounced";
 import { categoryLook } from "../lib/categories";
-import { AGE_RATINGS, emptyForm, fromManage, STEPS, stepErrors, stepPayload, type EventForm } from "../lib/eventForm";
+import {
+  AGE_RATINGS,
+  emptyForm,
+  firstInvalidStep,
+  fromManage,
+  manageToCard,
+  PARSED_LABELS,
+  STEP,
+  STEPS,
+  stepErrors,
+  stepOfField,
+  stepPayload,
+  type EventForm,
+} from "../lib/eventForm";
+import { readLocal, writeLocal } from "../lib/storage";
 import { formatPrice, formatTime, formatWhen } from "../lib/format";
 import { Badge } from "../ui/Badge";
 import { Button, ButtonLink } from "../ui/Button";
@@ -188,10 +207,42 @@ function VenuePicker({ form, update, orgId }: { form: EventForm; update: Update;
   );
 }
 
-function StepWhere({ form, update, orgId, timeZone }: { form: EventForm; update: Update; orgId: number | null; timeZone: string }) {
-  const [picking, setPicking] = useState(false);
+function StepWhen({ form, update, timeZone }: { form: EventForm; update: Update; timeZone: string }) {
   const setSession = (i: number, patch: Partial<EventForm["sessions"][number]>) =>
     update({ sessions: form.sessions.map((s, j) => (j === i ? { ...s, ...patch } : s)) });
+  return (
+    <Group title="Сеансы">
+      <p className="small muted">
+        Время — местное для места события ({timeZone}). Если место ещё не выбрано, на шаге «Где» время пересчитаем.
+      </p>
+      {form.sessions.map((s, i) => (
+        <div key={s.id ?? `new-${i}`} className="session-edit">
+          <Field label="Начало">
+            {(p) => <Input {...p} type="datetime-local" value={s.starts} onChange={(e) => setSession(i, { starts: e.target.value })} />}
+          </Field>
+          <Field label="Конец (необязательно)">
+            {(p) => <Input {...p} type="datetime-local" value={s.ends} onChange={(e) => setSession(i, { ends: e.target.value })} />}
+          </Field>
+          {form.sessions.length > 1 && (
+            <Button variant="ghost" size="sm" icon={<X size={16} aria-hidden />} onClick={() => update({ sessions: form.sessions.filter((_, j) => j !== i) })}>
+              Убрать
+            </Button>
+          )}
+        </div>
+      ))}
+      {form.sessions.length < 50 && (
+        <div>
+          <Button variant="ghost" icon={<Plus size={16} aria-hidden />} onClick={() => update({ sessions: [...form.sessions, { id: null, starts: "", ends: "" }] })}>
+            Ещё сеанс
+          </Button>
+        </div>
+      )}
+    </Group>
+  );
+}
+
+function StepWhere({ form, update, orgId }: { form: EventForm; update: Update; orgId: number | null }) {
+  const [picking, setPicking] = useState(false);
   return (
     <>
       <div className="chips" role="group" aria-label="Формат">
@@ -220,32 +271,7 @@ function StepWhere({ form, update, orgId, timeZone }: { form: EventForm; update:
           <VenuePicker form={form} update={update} orgId={orgId} />
         </Group>
       )}
-      <Group title="Сеансы">
-        <p className="small muted">Время — местное для места события ({timeZone}).</p>
-        {form.sessions.map((s, i) => (
-          <div key={s.id ?? `new-${i}`} className="session-edit">
-            <Field label="Начало">
-              {(p) => <Input {...p} type="datetime-local" value={s.starts} onChange={(e) => setSession(i, { starts: e.target.value })} />}
-            </Field>
-            <Field label="Конец (необязательно)">
-              {(p) => <Input {...p} type="datetime-local" value={s.ends} onChange={(e) => setSession(i, { ends: e.target.value })} />}
-            </Field>
-            {form.sessions.length > 1 && (
-              <Button variant="ghost" size="sm" icon={<X size={16} aria-hidden />} onClick={() => update({ sessions: form.sessions.filter((_, j) => j !== i) })}>
-                Убрать
-              </Button>
-            )}
-          </div>
-        ))}
-        {form.sessions.length < 50 && (
-          <div>
-            <Button variant="ghost" icon={<Plus size={16} aria-hidden />} onClick={() => update({ sessions: [...form.sessions, { id: null, starts: "", ends: "" }] })}>
-              Ещё сеанс
-            </Button>
-          </div>
-        )}
-      </Group>
-      <Sheet open={picking || form.locality_id === null} onClose={() => setPicking(false)} title="Где пройдёт событие">
+      <Sheet open={picking} onClose={() => setPicking(false)} title="Где пройдёт событие">
         <LocalityPicker
           onPick={(l) => {
             update({ locality_id: l.id, locality_name: l.name, venue_id: null, venue_name: null });
@@ -361,7 +387,7 @@ function StepCover({ form, update }: { form: EventForm; update: Update }) {
   );
 }
 
-function Summary({ event }: { event: EventManage }) {
+export function Summary({ event }: { event: EventManage }) {
   const where = event.is_online ? "Онлайн" : [event.venue?.name, event.locality_name].filter(Boolean).join(", ");
   return (
     <Card className="stack">
@@ -398,7 +424,49 @@ function Summary({ event }: { event: EventManage }) {
   );
 }
 
-function StepReview({ event }: { event: EventManage }) {
+/** Правила модерации до отправки: блокирующие нарушения и советы (POST /events/{id}/check). */
+function Precheck({ event, onFix }: { event: EventManage; onFix: (step: number) => void }) {
+  const check = useQuery({
+    queryKey: ["check", event.id, event.updated_at],
+    queryFn: () => checkEvent(event.id),
+  });
+  if (check.isPending) return <p className="small muted">Проверяем по правилам…</p>;
+  if (check.isError) return <FormErrors error={check.error} />;
+  const { violations, warnings } = check.data;
+  if (violations.length === 0 && warnings.length === 0)
+    return (
+      <div className="notice" role="status">
+        <BadgeCheck size={18} aria-hidden />
+        <span>По правилам всё в порядке.</span>
+      </div>
+    );
+  return (
+    <div className="stack stack--tight" role="status">
+      {violations.length > 0 && (
+        <p className="small">С этими ошибками правила отклонят заявку сразу — исправь их перед отправкой.</p>
+      )}
+      {violations.map((v) => (
+        <div key={`${v.code}-${v.field}`} className="notice notice--danger">
+          <CircleAlert size={18} aria-hidden />
+          <span>
+            {v.message}{" "}
+            <button type="button" className="link-btn" onClick={() => onFix(stepOfField(v.field))}>
+              Исправить
+            </button>
+          </span>
+        </div>
+      ))}
+      {warnings.map((w) => (
+        <div key={w} className="notice notice--sun">
+          <TriangleAlert size={18} aria-hidden />
+          <span>{w}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StepReview({ event, onFix }: { event: EventManage; onFix: (step: number) => void }) {
   const client = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
@@ -408,7 +476,8 @@ function StepReview({ event }: { event: EventManage }) {
     mutationFn: () => submitEvent(event.id),
     onSuccess: (e) => {
       set(e);
-      toast.show(official ? "Опубликовано" : "Отправили на проверку — итог придёт в бот");
+      if (e.status === "rejected") toast.show(`Правила отклонили: ${e.moderation_reason ?? "см. замечания"}`, "error");
+      else toast.show(official ? "Опубликовано" : "Отправили на проверку — итог придёт в бот");
     },
   });
   const cancel = useMutation({
@@ -422,18 +491,25 @@ function StepReview({ event }: { event: EventManage }) {
     mutationFn: () => deleteEvent(event.id),
     onSuccess: () => {
       toast.show("Черновик удалён");
-      navigate(event.organization_id ? `/org/${event.organization_id}` : "/org/0", { replace: true });
+      navigate(event.organization_id ? `/org/${event.organization_id}` : "/my", { replace: true });
     },
   });
   const canSubmit = event.status === "draft" || event.status === "rejected";
   return (
     <>
+      <section className="stack" aria-label="Как карточка выглядит в ленте">
+        <p className="eyebrow">Так увидят в ленте</p>
+        <div className="feed__grid feed__grid--one">
+          <EventCardView card={manageToCard(event)} />
+        </div>
+      </section>
       <Summary event={event} />
+      {canSubmit && <Precheck event={event} onFix={onFix} />}
       {canSubmit && (
         <p className="small muted">
           {official
             ? "Событие сразу появится в «Официальных» с отметкой «Организатор проверен»."
-            : "Событие проверит модерация, после этого оно появится в «От сообщества». Результат пришлём в бот."}
+            : "Событие проверит модерация, после этого оно появится в «От жителей». Результат пришлём в бот."}
         </p>
       )}
       <FormErrors error={submit.error ?? cancel.error ?? remove.error} />
@@ -470,36 +546,100 @@ function StepReview({ event }: { event: EventManage }) {
   );
 }
 
-function Editor({ event, orgId, initialStep }: { event: EventManage | null; orgId: number | null; initialStep: number }) {
+const BACKUP = "afisha.draft_backup.";
+const AUTOSAVE_MS = 1500;
+/** Шаги, которые сохраняются на сервер сами: без сеансов и места (там пересчёт пояса). */
+const AUTOSAVE_STEPS = new Set<number>([STEP.main, STEP.price, STEP.cover]);
+
+interface Backup {
+  form: EventForm;
+  saved_at: string;
+}
+
+function readBackup(key: string): Backup | null {
+  try {
+    const raw = readLocal(BACKUP + key);
+    return raw ? (JSON.parse(raw) as Backup) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBackup(key: string, form: EventForm | null): void {
+  writeLocal(BACKUP + key, form ? JSON.stringify({ form, saved_at: new Date().toISOString() }) : null);
+}
+
+/** От чьего имени: от себя («От жителей») или от проверенной организации («Официальные»). */
+export function TierChoice({ orgId, onChange }: { orgId: number | null; onChange: (id: number | null) => void }) {
+  const orgs = useQuery({ queryKey: ["orgs"], queryFn: fetchMyOrgs, staleTime: 60_000 });
+  const verified = (orgs.data ?? []).filter((o) => o.verified);
+  if (verified.length === 0) return null;
+  return (
+    <Group title="Куда попадёт афиша">
+      <div className="chips">
+        <Chip pressed={orgId === null} onClick={() => onChange(null)}>
+          От жителей · от себя
+        </Chip>
+        {verified.map((o) => (
+          <Chip key={o.id} pressed={orgId === o.id} icon={<BadgeCheck size={15} aria-hidden />} onClick={() => onChange(o.id)}>
+            Официальные · {o.name}
+          </Chip>
+        ))}
+      </div>
+    </Group>
+  );
+}
+
+export function Editor({ event, orgId, initialStep }: { event: EventManage | null; orgId: number | null; initialStep: number }) {
   const client = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
+  const backupKey = event ? String(event.id) : "new";
+  const [restore, setRestore] = useState<Backup | null>(() => {
+    const backup = readBackup(backupKey);
+    // Копия старше сохранённого на сервере не нужна.
+    return backup && (!event || backup.saved_at > event.updated_at) ? backup : null;
+  });
   const [form, setForm] = useState<EventForm>(() => (event ? fromManage(event) : emptyForm()));
   const [step, setStep] = useState(event ? initialStep : 0);
   const [shown, setShown] = useState<string[]>([]);
-  const update: Update = (patch) => setForm((f) => ({ ...f, ...patch }));
+  const [owner, setOwner] = useState<number | null>(orgId);
+  const dirty = useRef(false);
+  const update: Update = (patch) => {
+    dirty.current = true;
+    setForm((f) => ({ ...f, ...patch }));
+  };
   const timeZone = event?.timezone ?? "Europe/Moscow";
-  const organization = event?.organization_id ?? orgId;
+  const organization = event?.organization_id ?? owner;
+  const editable = !event || ["draft", "rejected"].includes(event.status);
+
+  const persist = async (current: number): Promise<EventManage> => {
+    if (!event) throw new Error("Черновик ещё не создан");
+    if (current === STEP.where) {
+      // Сначала место: от него зависит пояс, в котором заданы сеансы.
+      const placed = await patchEvent(event.id, stepPayload(STEP.where, form, timeZone));
+      if (placed.timezone === timeZone) return placed;
+      return patchEvent(event.id, stepPayload(STEP.when, form, placed.timezone));
+    }
+    return patchEvent(event.id, stepPayload(current, form, timeZone));
+  };
 
   const save = useMutation({
     mutationFn: async (current: number): Promise<EventManage | null> => {
       if (!event) {
-        const created = await createEvent({ ...stepPayload(0, form, timeZone), title: form.title.trim(), organization_id: orgId });
+        const created = await createEvent({ ...stepPayload(0, form, timeZone), title: form.title.trim(), organization_id: owner });
+        writeBackup("new", null);
         toast.show("Черновик создан");
-        navigate(`/draft/${created.id}?step=1`, { replace: true });
+        navigate(`/draft/${created.id}?step=${STEP.when}`, { replace: true });
         return null;
       }
-      if (current === 1) {
-        // Сначала место: от него зависит часовой пояс, в котором заданы сеансы.
-        const { sessions, ...place } = stepPayload(1, form, timeZone);
-        const placed = await patchEvent(event.id, place);
-        return patchEvent(event.id, { sessions: stepPayload(1, form, placed.timezone).sessions ?? sessions });
-      }
-      return patchEvent(event.id, stepPayload(current, form, timeZone));
+      return persist(current);
     },
     onSuccess: (saved, current) => {
       if (!saved) return;
       client.setQueryData(["manage", saved.id], saved);
+      writeBackup(backupKey, null);
+      dirty.current = false;
       // Новые сеансы получили id — иначе следующее сохранение создаст их повторно.
       setForm((f) => ({ ...f, sessions: fromManage(saved).sessions }));
       setStep(current + 1);
@@ -507,11 +647,46 @@ function Editor({ event, orgId, initialStep }: { event: EventManage | null; orgI
     },
   });
 
+  // Автосохранение: копия на устройстве всегда, на сервер — для простых шагов без ошибок.
+  const autosave = useMutation({
+    mutationFn: (current: number) => persist(current),
+    onSuccess: (saved) => {
+      client.setQueryData(["manage", saved.id], saved);
+      writeBackup(backupKey, null);
+      dirty.current = false;
+    },
+  });
+  useEffect(() => {
+    if (!dirty.current || !editable) return;
+    const timer = window.setTimeout(() => {
+      writeBackup(backupKey, form);
+      if (event && AUTOSAVE_STEPS.has(step) && stepErrors(step, form, new Date(), timeZone).length === 0)
+        autosave.mutate(step);
+    }, AUTOSAVE_MS);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сохраняем только по изменению формы
+  }, [form]);
+
+  const goto = (target: number) => {
+    setShown([]);
+    setStep(target);
+  };
   const next = () => {
     const errors = stepErrors(step, form, new Date(), timeZone);
     setShown(errors);
-    if (errors.length === 0) save.mutate(step);
+    if (errors.length > 0) return;
+    // На «Проверку» — только когда все шаги заполнены.
+    if (step === STEP.cover) {
+      const bad = firstInvalidStep(form, new Date(), timeZone);
+      if (bad !== null) {
+        setShown([`Не заполнен шаг «${STEPS[bad]}»`, ...stepErrors(bad, form, new Date(), timeZone)]);
+        setStep(bad);
+        return;
+      }
+    }
+    save.mutate(step);
   };
+  const parsed = (event?.ai_fields ?? []).filter((f) => PARSED_LABELS[f]);
 
   return (
     <main className="page page--narrow">
@@ -525,14 +700,56 @@ function Editor({ event, orgId, initialStep }: { event: EventManage | null; orgI
                 Официальное · {event.org_name ?? ""}
               </Badge>
             ) : (
-              <Badge>{organization ? "Организация не проверена · «От сообщества»" : "От сообщества"}</Badge>
+              <Badge>{organization ? "Организация не проверена · «От жителей»" : "От жителей"}</Badge>
             )}
           </div>
         </div>
-        {event?.moderation_reason && ["rejected", "hidden"].includes(event.status) && (
+        {event?.moderation_reason && ["rejected", "hidden", "draft"].includes(event.status) && (
           <div className="notice notice--danger">
             <CircleAlert size={18} aria-hidden />
-            <span>Причина: {event.moderation_reason}</span>
+            <span>
+              {event.status === "draft" ? "Вернули на доработку" : "Причина"}: {event.moderation_reason}
+            </span>
+          </div>
+        )}
+        {parsed.length > 0 && event?.status === "draft" && (
+          <div className="notice notice--sun">
+            <Sparkles size={18} aria-hidden />
+            <span>
+              Из анонса распознали:{" "}
+              {parsed.map((f) => (
+                <mark key={f} className="parsed">
+                  {PARSED_LABELS[f]}
+                </mark>
+              ))}
+              . Проверь каждый шаг — разбор мог ошибиться.
+            </span>
+          </div>
+        )}
+        {restore && (
+          <div className="notice" role="status">
+            <span>Есть несохранённые правки с этого устройства.</span>
+            <div className="row">
+              <Button
+                size="sm"
+                onClick={() => {
+                  update(restore.form);
+                  setRestore(null);
+                }}
+              >
+                Вернуть
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  writeBackup(backupKey, null);
+                  setRestore(null);
+                }}
+              >
+                Не нужно
+              </Button>
+            </div>
           </div>
         )}
 
@@ -544,10 +761,7 @@ function Editor({ event, orgId, initialStep }: { event: EventManage | null; orgI
               className="step"
               aria-current={step === i ? "step" : undefined}
               disabled={!event}
-              onClick={() => {
-                setShown([]);
-                setStep(i);
-              }}
+              onClick={() => goto(i)}
             >
               <span className="step__num">{i + 1}</span>
               {title}
@@ -556,18 +770,20 @@ function Editor({ event, orgId, initialStep }: { event: EventManage | null; orgI
         </nav>
 
         <div className="stack">
-          {step === 0 && <StepMain form={form} update={update} />}
-          {step === 1 && <StepWhere form={form} update={update} orgId={organization} timeZone={timeZone} />}
-          {step === 2 && <StepPrice form={form} update={update} canPushkin={event?.can_pushkin ?? false} />}
-          {step === 3 && <StepCover form={form} update={update} />}
-          {step === 4 && event && <StepReview event={event} />}
+          {step === STEP.main && !event && <TierChoice orgId={owner} onChange={setOwner} />}
+          {step === STEP.main && <StepMain form={form} update={update} />}
+          {step === STEP.when && <StepWhen form={form} update={update} timeZone={timeZone} />}
+          {step === STEP.where && <StepWhere form={form} update={update} orgId={organization} />}
+          {step === STEP.price && <StepPrice form={form} update={update} canPushkin={event?.can_pushkin ?? false} />}
+          {step === STEP.cover && <StepCover form={form} update={update} />}
+          {step === STEP.review && event && <StepReview event={event} onFix={goto} />}
         </div>
 
         <FormErrors messages={shown} error={save.error} />
-        {step < 4 && (
+        {step < STEP.review && (
           <div className="row">
             {step > 0 && (
-              <Button variant="secondary" size="lg" onClick={() => setStep(step - 1)}>
+              <Button variant="secondary" size="lg" onClick={() => goto(step - 1)}>
                 Назад
               </Button>
             )}
@@ -576,12 +792,17 @@ function Editor({ event, orgId, initialStep }: { event: EventManage | null; orgI
             </Button>
           </div>
         )}
+        {event && editable && (
+          <p className="small muted" aria-live="polite">
+            {autosave.isPending ? "Сохраняем…" : autosave.isError ? "Не удалось сохранить автоматически — нажми «Сохранить и дальше»." : "Правки сохраняются сами."}
+          </p>
+        )}
       </div>
     </main>
   );
 }
 
-function Draft({ me, id }: { me: Me; id: number }) {
+export function Draft({ me, id }: { me: Me; id: number }) {
   const [params] = useSearchParams();
   const orgParam = Number(params.get("org"));
   const orgId = Number.isInteger(orgParam) && orgParam > 0 ? orgParam : null;
@@ -607,12 +828,12 @@ function Draft({ me, id }: { me: Me; id: number }) {
   return <Editor key={id} event={event.data} orgId={event.data.organization_id} initialStep={initialStep} />;
 }
 
-/** Форма события в 5 шагов (FR-PUB): /draft/0 — новое (?org=<id> — от организации). */
+/** Форма события в 6 шагов (FR-PUB): /draft/0 — новое (?org=<id> — от организации). */
 export function DraftPage() {
   const id = Number(useParams().id);
   if (!Number.isInteger(id) || id < 0) return <ErrorScreen message="Событие не найдено." />;
   return (
-    <RequireMax title="Предложить событие" text="Публиковать события можно после входа через MAX: туда придёт итог модерации и вопросы от жителей.">
+    <RequireMax title="Добавить афишу" text="Чтобы добавить афишу, войди через MAX: туда придёт итог модерации.">
       {(me) => <Draft me={me} id={id} />}
     </RequireMax>
   );

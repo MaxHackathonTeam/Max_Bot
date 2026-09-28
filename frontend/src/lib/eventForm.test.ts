@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   emptyForm,
+  firstInvalidStep,
   isoToZonedInput,
+  stepOfField,
   stepErrors,
   stepPayload,
   zonedInputToIso,
@@ -49,7 +51,7 @@ describe("шаги формы", () => {
     ).toEqual([]);
   });
 
-  it("шаг 2: место, будущий сеанс, конец после начала", () => {
+  it("шаг «Когда»: будущий сеанс, конец после начала", () => {
     const form = { ...emptyForm(), locality_id: 1 };
     expect(stepErrors(1, form, now)).toContain(
       "Укажи дату и время начала каждого сеанса",
@@ -68,22 +70,22 @@ describe("шаги формы", () => {
       ],
     };
     expect(stepErrors(1, bad, now)).toEqual(["Сеанс 1: конец раньше начала"]);
-    const online = {
-      ...emptyForm(),
-      is_online: true,
-      online_url: "http://x",
-      sessions: bad.sessions.slice(0, 1),
-    };
-    expect(stepErrors(1, online, now)).toContain(
-      "Ссылка на трансляцию должна начинаться с https://",
-    );
   });
 
-  it("шаг 3: цена", () => {
-    expect(stepErrors(2, emptyForm(), now)).toEqual([
+  it("шаг «Где»: пункт или https-ссылка онлайна", () => {
+    expect(stepErrors(2, emptyForm(), now)).toEqual(["Выбери населённый пункт"]);
+    expect(stepErrors(2, { ...emptyForm(), locality_id: 1 }, now)).toEqual([]);
+    const online = { ...emptyForm(), is_online: true, online_url: "http://x" };
+    expect(stepErrors(2, online, now)).toEqual([
+      "Ссылка на трансляцию должна начинаться с https://",
+    ]);
+  });
+
+  it("шаг «Цена и возраст»", () => {
+    expect(stepErrors(3, emptyForm(), now)).toEqual([
       "Укажи, платное ли событие",
     ]);
-    expect(stepErrors(2, { ...emptyForm(), price_type: "paid" }, now)).toEqual([
+    expect(stepErrors(3, { ...emptyForm(), price_type: "paid" }, now)).toEqual([
       "Укажи цену билета",
     ]);
     const range = {
@@ -92,15 +94,15 @@ describe("шаги формы", () => {
       price_min: "500",
       price_max: "300",
     };
-    expect(stepErrors(2, range, now)).toEqual([
+    expect(stepErrors(3, range, now)).toEqual([
       "Максимальная цена меньше минимальной",
     ]);
-    expect(stepErrors(2, { ...emptyForm(), price_type: "free" }, now)).toEqual(
+    expect(stepErrors(3, { ...emptyForm(), price_type: "free" }, now)).toEqual(
       [],
     );
   });
 
-  it("payload шага 2 переводит сеансы в UTC и убирает площадку у онлайна", () => {
+  it("payload «Когда» переводит сеансы в UTC, «Где» убирает площадку у онлайна", () => {
     const form = {
       ...emptyForm(),
       is_online: true,
@@ -109,13 +111,15 @@ describe("шаги формы", () => {
       sessions: [{ id: 3, starts: "2026-09-27T18:00", ends: "" }],
     };
     expect(stepPayload(1, form, "Europe/Moscow")).toEqual({
+      sessions: [
+        { id: 3, starts_at: "2026-09-27T15:00:00.000Z", ends_at: null },
+      ],
+    });
+    expect(stepPayload(2, form, "Europe/Moscow")).toEqual({
       is_online: true,
       online_url: "https://stream.test",
       locality_id: null,
       venue_id: null,
-      sessions: [
-        { id: 3, starts_at: "2026-09-27T15:00:00.000Z", ends_at: null },
-      ],
     });
   });
 
@@ -125,10 +129,35 @@ describe("шаги формы", () => {
       price_type: "free" as const,
       price_min: "100",
     };
-    expect(stepPayload(2, form, "UTC")).toMatchObject({
+    expect(stepPayload(3, form, "UTC")).toMatchObject({
       price_type: "free",
       price_min: null,
       price_max: null,
     });
+  });
+});
+
+describe("проверка и превью", () => {
+  const now = new Date("2026-09-25T12:00:00Z");
+
+  it("первый шаг с ошибкой", () => {
+    expect(firstInvalidStep(emptyForm(), now)).toBe(0);
+    const filled = {
+      ...emptyForm(),
+      title: "Концерт хора",
+      category: "concert",
+      locality_id: 1,
+      sessions: [{ id: null, starts: "2026-09-27T18:00", ends: "" }],
+    };
+    expect(firstInvalidStep(filled, now)).toBe(3);
+    expect(firstInvalidStep({ ...filled, price_type: "free" }, now)).toBeNull();
+  });
+
+  it("поле из правил ведёт на свой шаг", () => {
+    expect(stepOfField("title")).toBe(0);
+    expect(stepOfField("sessions")).toBe(1);
+    expect(stepOfField("venue_id")).toBe(2);
+    expect(stepOfField("price_min")).toBe(3);
+    expect(stepOfField("contacts")).toBe(4);
   });
 });

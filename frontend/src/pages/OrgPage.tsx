@@ -41,7 +41,7 @@ function ListSkeleton() {
   );
 }
 
-/** /org/0 — мои организации и мои события «от сообщества». */
+/** /org/0 — мои организации и мои события «от жителей». */
 function Cabinet({ me }: { me: Me }) {
   const navigate = useNavigate();
   const client = useQueryClient();
@@ -81,7 +81,7 @@ function Cabinet({ me }: { me: Me }) {
                   Предложить событие
                 </ButtonLink>
               </div>
-              <p className="small muted">Без организации событие попадает в «От сообщества» после проверки.</p>
+              <p className="small muted">Без организации событие попадает в «От жителей» после проверки.</p>
               <StatusChips value={status} onChange={setStatus} />
               {events.isPending && <ListSkeleton />}
               {events.isError && <ErrorBlock message={events.error.message} onRetry={() => void events.refetch()} />}
@@ -149,7 +149,7 @@ function OrgEvents({ org }: { org: Org }) {
       {!org.verified && (
         <div className="notice notice--sun">
           <Info size={18} aria-hidden />
-          <span>Пока организация не проверена, события уходят на модерацию и публикуются в «От сообщества».</span>
+          <span>Пока организация не проверена, события уходят на модерацию и публикуются в «От жителей».</span>
         </div>
       )}
       <StatusChips value={status} onChange={setStatus} />

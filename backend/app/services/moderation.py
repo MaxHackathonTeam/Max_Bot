@@ -4,7 +4,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -239,6 +239,8 @@ _ADMIN_TRANSITIONS: dict[str, tuple[set[str], str]] = {
         EventStatus.rejected,
     ),
     "hide": ({EventStatus.pending, EventStatus.published}, EventStatus.hidden),
+    # Вернуть на доработку: автор правит черновик и отправляет снова.
+    "return": ({EventStatus.pending, EventStatus.hidden}, EventStatus.draft),
 }
 
 
@@ -261,8 +263,8 @@ async def admin_decide(
             status_code=409,
         )
     reason = reason.strip() if reason else None
-    if action == "reject" and not reason:
-        raise AppError("reason_required", "Укажи причину отказа", status_code=422)
+    if action in ("reject", "return") and not reason:
+        raise AppError("reason_required", "Укажи причину", status_code=422)
     before = event.status
     event.status = target
     event.moderation_reason = reason if action != "approve" else None
@@ -281,6 +283,8 @@ async def admin_decide(
             "approve": ModerationVerdict.approve,
             "reject": ModerationVerdict.reject,
             "hide": ModerationVerdict.hide,
+            # Отдельного вердикта нет: возврат отличается статусом pending → draft в audit_log.
+            "return": ModerationVerdict.reject,
         }[action],
         reasons=[reason] if reason else None,
         actor_user_id=admin_user.id,
@@ -293,12 +297,31 @@ async def admin_decide(
         EventStatus.hidden: texts.EVENT_HIDDEN.format(
             title=event.title, reason=reason or texts.MODERATION_DEFAULT_REASON
         ),
+        EventStatus.draft: texts.EVENT_RETURNED.format(title=event.title, reason=reason),
     }[target]
     await notify_owner(session, notifier, event, text)
     return event
 
 
-async def queue_events(session: AsyncSession, limit: int = 20) -> list[QueueEvent]:
+QueueFilter = Literal["new", "returned", "all"]
+
+
+async def queue_events(
+    session: AsyncSession, limit: int = 20, kind: QueueFilter = "all"
+) -> list[QueueEvent]:
+    """Очередь по времени подачи.
+
+    returned — событие уже было у админа (отклонено или возвращено).
+    """
+    returned = (
+        select(ModerationDecision.id)
+        .where(
+            ModerationDecision.entity_type == "event",
+            ModerationDecision.entity_id == Event.id,
+            ModerationDecision.actor_type == ModerationActor.admin,
+        )
+        .exists()
+    )
     reports = (
         select(func.count())
         .where(Report.event_id == Event.id, Report.resolved_at.is_(None))
@@ -309,13 +332,18 @@ async def queue_events(session: AsyncSession, limit: int = 20) -> list[QueueEven
         .where(EventSession.event_id == Event.id, EventSession.starts_at >= utcnow())
         .scalar_subquery()
     )
-    rows = await session.execute(
-        select(Event, Organization.name, reports, next_start)
+    stmt = (
+        select(Event, Organization.name, reports, next_start, returned)
         .outerjoin(Organization, Organization.id == Event.organization_id)
         .where(Event.status.in_((EventStatus.pending, EventStatus.hidden)))
         .order_by(Event.updated_at, Event.id)
         .limit(limit)
     )
+    if kind == "new":
+        stmt = stmt.where(~returned)
+    elif kind == "returned":
+        stmt = stmt.where(returned)
+    rows = await session.execute(stmt)
     return [
         QueueEvent(
             id=event.id,
@@ -328,6 +356,7 @@ async def queue_events(session: AsyncSession, limit: int = 20) -> list[QueueEven
             reports=count or 0,
             next_starts_at=starts,
             updated_at=event.updated_at,
+            returned=bool(was_returned),
         )
-        for event, org_name, count, starts in rows.tuples()
+        for event, org_name, count, starts, was_returned in rows.tuples()
     ]
