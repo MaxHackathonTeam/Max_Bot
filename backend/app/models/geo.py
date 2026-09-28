@@ -1,5 +1,5 @@
 from geoalchemy2 import Geography, WKBElement
-from sqlalchemy import ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Computed, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, IdMixin, TimestampMixin, enum_check
@@ -12,15 +12,26 @@ class Locality(IdMixin, TimestampMixin, Base):
         enum_check("kind", LocalityKind),
         Index("ix_localities_point", "point", postgresql_using="gist"),
         Index(
-            "ix_localities_name_trgm",
-            "name",
+            "ix_localities_name_norm_trgm",
+            "name_norm",
             postgresql_using="gin",
-            postgresql_ops={"name": "gin_trgm_ops"},
+            postgresql_ops={"name_norm": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_localities_name_norm_prefix",
+            "name_norm",
+            postgresql_ops={"name_norm": "varchar_pattern_ops"},
         ),
     )
 
     fias_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    # Ключ строки справочника (osm-n<id>); у пунктов, созданных вручную, — пусто.
+    key: Mapped[str | None] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(255))
+    # Для поиска: lower, ё→е, дефисы → пробел (зеркало — localities.normalize).
+    name_norm: Mapped[str] = mapped_column(
+        String(255), Computed("translate(lower(name), 'ё-–', 'е  ')", persisted=True)
+    )
     kind: Mapped[str] = mapped_column(String(16))
     region: Mapped[str | None] = mapped_column(String(255))
     region_code: Mapped[str | None] = mapped_column(String(8), index=True)

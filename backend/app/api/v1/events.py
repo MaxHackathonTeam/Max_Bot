@@ -88,6 +88,33 @@ async def list_events(
     return await events_service.search(session, filters)
 
 
+@router.get(
+    "/nearest",
+    response_model=EventPage,
+    summary="Ближайшие события с расстоянием",
+    description=(
+        f"Будущие события в пределах {events_service.NEAREST_KM} км от пункта или точки, "
+        "от близких к дальним; distance_km заполнен. Для пустой ленты «рядом ничего нет». "
+        "Без пагинации: next_cursor всегда null."
+    ),
+)
+async def nearest_events(
+    session: SessionDep,
+    locality_id: int | None = None,
+    lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
+    lon: Annotated[float | None, Query(ge=-180, le=180)] = None,
+    tier: Literal["official", "community"] = "official",
+    limit: Annotated[int, Query(ge=1, le=events_service.NEAREST_LIMIT)] = 5,
+) -> EventPage:
+    if (lat is None) != (lon is None):
+        raise AppError("bad_request", "Нужны обе координаты: lat и lon")
+    if locality_id is None and lat is None:
+        raise AppError("bad_request", "Укажи locality_id или координаты lat и lon")
+    return await events_service.nearest(
+        session, locality_id=locality_id, lat=lat, lon=lon, tier=tier, limit=limit
+    )
+
+
 @router.get("/{event_id}", response_model=EventDetail, summary="Карточка события")
 async def get_event(
     event_id: int,

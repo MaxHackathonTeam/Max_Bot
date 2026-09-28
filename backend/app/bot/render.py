@@ -9,6 +9,7 @@ from app.bot import texts
 from app.models.users import User
 from app.schemas.events import EventCard, SavedItem, SessionOut
 from app.schemas.geo import LocalityOut
+from app.schemas.manage import MyEventItem
 from app.services.categories import BY_SLUG
 
 
@@ -62,8 +63,23 @@ def _item(n: int, card: EventCard, session: SessionOut | None) -> str:
     )
 
 
-def feed(title: str, place: str, radius: int, cards: Sequence[EventCard], offset: int = 0) -> str:
-    lines = [texts.FEED_HEADER.format(title=title, place=place, radius=radius), ""]
+def feed(
+    title: str,
+    place: str,
+    radius: int | None,
+    cards: Sequence[EventCard],
+    offset: int = 0,
+    *,
+    tier: str = "official",
+) -> str:
+    """Одна лента доверия (official или community): ленты не смешиваются."""
+    tier_label = texts.FEED_TIERS[tier]
+    header = (
+        texts.FEED_HEADER.format(tier=tier_label, title=title, place=place, radius=radius)
+        if radius is not None
+        else texts.FEED_HEADER_SEARCH.format(tier=tier_label, title=title, place=place)
+    )
+    lines = [header, ""]
     lines += [_item(n, c, c.next_session) for n, c in enumerate(cards, start=offset + 1)]
     if any(c.is_demo for c in cards):
         lines += ["", texts.FEED_DEMO_NOTE]
@@ -79,8 +95,32 @@ def saved(items: Sequence[SavedItem]) -> str:
 
 
 def locality_label(locality: LocalityOut) -> str:
-    extra = locality.municipality or locality.region
-    return f"{locality.name}, {extra}" if extra else locality.name
+    """«Ёлкино, Шимский район, Новгородская область» — тёзки различаются районом и регионом."""
+    parts = [locality.name]
+    parts += [p for p in (locality.municipality, locality.region) if p and p != locality.name]
+    return ", ".join(dict.fromkeys(parts))
+
+
+def my_events(items: Sequence[MyEventItem]) -> str:
+    lines = [texts.MY_HEADER, ""]
+    for n, item in enumerate(items, start=1):
+        reason = (
+            texts.MY_REASON.format(reason=item.moderation_reason)
+            if item.moderation_reason and item.status in ("rejected", "hidden", "pending")
+            else ""
+        )
+        lines.append(
+            texts.MY_ITEM.format(
+                n=n,
+                title=item.title or "—",
+                status=texts.MY_STATUSES.get(item.status, item.status),
+                when=(
+                    f" · {when(item.next_starts_at, item.timezone)}" if item.next_starts_at else ""
+                ),
+                reason=reason,
+            )
+        )
+    return "\n".join(lines)
 
 
 def settings(user: User, place: str | None) -> str:

@@ -154,7 +154,7 @@ async def test_web_login_merges_guest(
     max_id = random_max_id()
     await handle_update(bot, _started(max_id, f"login_{code}"))
     prompt = _last(max_api, "send")
-    assert prompt["text"] == texts.WEB_LOGIN_CONFIRM.format(code=code)
+    assert prompt["text"] == texts.WEB_LOGIN_CONFIRM.format(name="Маша", code=code)
     button = prompt["attachments"][0]["payload"]["buttons"][0][0]
     assert button["payload"] == f"{keyboards.P_WEB_LOGIN}:{code}"
     await handle_update(bot, _callback(max_id, button["payload"]))

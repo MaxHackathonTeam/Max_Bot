@@ -648,6 +648,25 @@ async def remove(session: AsyncSession, user: User, event_id: int) -> None:
 
 async def manage_view(session: AsyncSession, user: User, event_id: int) -> EventManage:
     event = await _require_manage(session, user, event_id)
+    can_pushkin = await _tier_for(session, user, event.organization_id) == TrustTier.official
+    return await _manage_out(session, event, can_pushkin=can_pushkin)
+
+
+def check_flags(event: Event, sessions: list[EventSession]) -> list[rules.Violation]:
+    """Что правила §6 и обязательные поля говорят о событии сейчас (для карточки модератора)."""
+    return _required(event, sessions) + rules.check(_rules_data(event, sessions, None), utcnow())
+
+
+async def admin_view(
+    session: AsyncSession, event_id: int
+) -> tuple[Event, EventManage, list[rules.Violation]]:
+    """Событие глазами модератора: права проверяет вызывающий (AdminDep)."""
+    event = await _load(session, event_id)
+    out = await _manage_out(session, event, can_pushkin=event.trust_tier == TrustTier.official)
+    return event, out, check_flags(event, await _sessions(session, event.id))
+
+
+async def _manage_out(session: AsyncSession, event: Event, *, can_pushkin: bool) -> EventManage:
     org = (
         await session.get(Organization, event.organization_id)
         if event.organization_id is not None
@@ -708,7 +727,7 @@ async def manage_view(session: AsyncSession, user: User, event_id: int) -> Event
         published_at=event.published_at,
         created_at=event.created_at,
         updated_at=event.updated_at,
-        can_pushkin=await _tier_for(session, user, event.organization_id) == TrustTier.official,
+        can_pushkin=can_pushkin,
     )
 
 

@@ -92,24 +92,50 @@ async def test_get_updates_marker(max_client: MaxClient) -> None:
 
 
 @respx.mock
-async def test_ensure_webhook_idempotent(max_client: MaxClient) -> None:
+async def test_ensure_webhook_subscribes_and_keeps(max_client: MaxClient) -> None:
     url = "https://afisha.example/bot/webhook"
+    types = ["bot_started", "message_created", "message_callback"]
     respx.get(f"{BASE}/subscriptions").mock(
         side_effect=[
             httpx.Response(200, json={"subscriptions": []}),
-            httpx.Response(200, json={"subscriptions": [{"url": url}]}),
+            httpx.Response(200, json={"subscriptions": [{"url": url, "update_types": types}]}),
         ]
     )
     subscribe = respx.post(f"{BASE}/subscriptions").respond(200, json={"success": True})
 
-    assert await ensure_webhook(max_client, url, "secret_1") is True
-    assert await ensure_webhook(max_client, url, "secret_1") is False
+    assert await ensure_webhook(max_client, url, "secret_1", force=False) == "subscribed"
+    assert await ensure_webhook(max_client, url, "secret_1", force=False) == "ok"
     assert subscribe.call_count == 1
     assert json.loads(subscribe.calls.last.request.content) == {
         "url": url,
         "secret": "secret_1",
-        "update_types": ["bot_started", "message_created", "message_callback"],
+        "update_types": types,
     }
+
+
+@respx.mock
+async def test_ensure_webhook_force_resubscribes_with_new_secret(max_client: MaxClient) -> None:
+    """Секрет в MAX мог устареть: GET /subscriptions его не показывает, поэтому пересоздаём."""
+    url = "https://afisha.example/bot/webhook"
+    respx.get(f"{BASE}/subscriptions").respond(200, json={"subscriptions": [{"url": url}]})
+    delete = respx.delete(f"{BASE}/subscriptions").respond(200, json={"success": True})
+    subscribe = respx.post(f"{BASE}/subscriptions").respond(200, json={"success": True})
+
+    assert await ensure_webhook(max_client, url, "secret_2", force=True) == "resubscribed"
+    assert delete.calls.last.request.url.params["url"] == url
+    assert json.loads(subscribe.calls.last.request.content)["secret"] == "secret_2"
+
+
+@respx.mock
+async def test_ensure_webhook_fixes_missing_update_types(max_client: MaxClient) -> None:
+    url = "https://afisha.example/bot/webhook"
+    respx.get(f"{BASE}/subscriptions").respond(
+        200, json={"subscriptions": [{"url": url, "update_types": ["message_created"]}]}
+    )
+    respx.delete(f"{BASE}/subscriptions").respond(200, json={"success": True})
+    subscribe = respx.post(f"{BASE}/subscriptions").respond(200, json={"success": True})
+    assert await ensure_webhook(max_client, url, "secret_1", force=False) == "resubscribed"
+    assert subscribe.call_count == 1
 
 
 @respx.mock

@@ -2,7 +2,8 @@
 
 Сверено с официальной OpenAPI-схемой github.com/max-messenger/api-schema (schema.yaml):
 POST /messages?user_id|chat_id, POST /answers?callback_id, GET /updates,
-GET|POST|DELETE /subscriptions, GET /me. Авторизация — заголовок `Authorization: <token>`.
+GET|POST|DELETE /subscriptions, GET /me, PATCH /me/commands.
+Авторизация — заголовок `Authorization: <token>`.
 """
 
 import asyncio
@@ -184,6 +185,28 @@ class MaxClient:
 
     async def unsubscribe(self, url: str) -> None:
         await self.request("DELETE", "/subscriptions", params={"url": url})
+
+    async def set_commands(self, commands: list[tuple[str, str]]) -> None:
+        """Меню команд бота: PATCH /me/commands (BotCommandsPatch, не больше 32 команд)."""
+        body = {"commands": [{"name": n, "description": d} for n, d in commands[:32]]}
+        await self.request("PATCH", "/me/commands", json=body)
+
+    async def download(self, url: str, max_bytes: int) -> bytes:
+        """Файл вложения (PhotoAttachmentPayload.url). Только https, без редиректов, с лимитом."""
+        if not url.startswith("https://"):
+            raise ValueError("Ожидается https-ссылка на вложение")
+        # Отдельный клиент: ссылка ведёт на CDN, токен бота туда не отправляем.
+        async with (
+            httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_S, follow_redirects=False) as http,
+            http.stream("GET", url) as response,
+        ):
+            response.raise_for_status()
+            data = bytearray()
+            async for chunk in response.aiter_bytes():
+                data += chunk
+                if len(data) > max_bytes:
+                    raise ValueError("Вложение больше допустимого размера")
+            return bytes(data)
 
 
 def client_from_settings(settings: Settings) -> MaxClient | None:

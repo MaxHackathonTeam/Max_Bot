@@ -6,7 +6,10 @@
 from typing import Any
 
 import structlog
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.types import BigInteger
 
 from app.models.enums import AuditActor
 from app.models.system import AuditLog
@@ -54,3 +57,34 @@ async def record(
     session.add(entry)
     await session.flush()
     return entry
+
+
+async def record_many(
+    session: AsyncSession,
+    *,
+    action: str,
+    entity_type: str,
+    entity_ids: list[int],
+    actor_type: AuditActor = AuditActor.system,
+    diff: dict[str, Any] | None = None,
+) -> int:
+    """Одна запись на каждую сущность одним INSERT … SELECT (массовый импорт справочника)."""
+    if not entity_ids:
+        return 0
+    stmt = text(
+        "INSERT INTO audit_log (actor_type, action, entity_type, entity_id, diff, request_id) "
+        "SELECT :actor_type, :action, :entity_type, id, :diff, :request_id "
+        "FROM unnest(:ids) AS t(id)"
+    ).bindparams(bindparam("ids", type_=ARRAY(BigInteger)), bindparam("diff", type_=JSONB))
+    await session.execute(
+        stmt,
+        {
+            "actor_type": str(actor_type),
+            "action": action,
+            "entity_type": entity_type,
+            "ids": entity_ids,
+            "diff": _mask(diff),
+            "request_id": current_request_id(),
+        },
+    )
+    return len(entity_ids)

@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     max_api_base: str = "https://platform-api2.max.ru"
     max_webhook_secret: SecretStr | None = None
     bot_mode: Literal["webhook", "polling"] = "polling"
+    # Локальный poller снимает webhook-подписки только с явного согласия: иначе запуск
+    # с боевым токеном молча отключает прод-бота.
+    bot_poller_takeover: bool = False
 
     # Хранилища
     # Приложение ходит под ролью afisha_app (без DDL, audit_log только INSERT),

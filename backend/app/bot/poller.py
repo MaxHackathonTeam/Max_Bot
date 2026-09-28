@@ -1,6 +1,7 @@
 """Long polling бота для локального запуска (профиль compose `local`, BOT_MODE=polling).
 
-Перед стартом снимает webhook-подписки: при активном webhook GET /updates не работает.
+При активном webhook GET /updates не работает. Снимать подписки poller будет только с
+BOT_POLLER_TAKEOVER=1 — иначе локальный запуск с боевым токеном отключил бы прод-бота.
 """
 
 import asyncio
@@ -10,11 +11,13 @@ from redis.asyncio import Redis
 
 from app.bot.dispatcher import BotContext, handle_update
 from app.bot.fsm import RedisStateStore
-from app.bot.subscriptions import drop_webhooks
+from app.bot.subscriptions import drop_webhooks, sync_commands
 from app.core.config import get_settings
+from app.core.jobs import ArqJobQueue
 from app.core.logging import configure_logging
 from app.db.session import make_engine, make_sessionmaker
 from app.integrations.max import client_from_settings
+from app.services.notify import QueuedNotifier
 
 log = structlog.get_logger(__name__)
 
@@ -49,19 +52,34 @@ async def main() -> None:
         return
     engine = make_engine(settings.database_url)
     redis = Redis.from_url(settings.redis_url)
+    jobs = ArqJobQueue(settings.redis_url)
     ctx = BotContext(
         settings=settings,
         db=make_sessionmaker(engine),
         max=client,
         states=RedisStateStore(redis),
         redis=redis,
+        notifier=QueuedNotifier(jobs),
+        jobs=jobs,
     )
     try:
+        subs = await client.list_subscriptions()
+        if subs and not settings.bot_poller_takeover:
+            log.error(
+                "bot_poller_refused",
+                message="У бота есть webhook-подписка (прод?). Polling её снимет и прод-бот "
+                "замолчит. Если это действительно нужно — BOT_POLLER_TAKEOVER=1.",
+                subscriptions=len(subs),
+            )
+            await asyncio.Event().wait()
+            return
         await drop_webhooks(client)
+        await sync_commands(client)
         log.info("bot_poller_started")
         await poll(ctx, asyncio.Event())
     finally:
         await client.aclose()
+        await jobs.close()
         await redis.aclose()
         await engine.dispose()
 

@@ -55,6 +55,9 @@ Sort = Literal["date", "distance", "relevance"]
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 50
+# «Ближайшие события»: когда рядом пусто — ищем дальше, до NEAREST_KM, по расстоянию.
+NEAREST_KM = 500
+NEAREST_LIMIT = 10
 RADIUS_CHOICES = (5, 15, 30, 50)
 TYPO_THRESHOLD = 0.45
 # По прямой ссылке видны и прошедшие/отменённые, но не черновики и не скрытые.
@@ -364,6 +367,29 @@ async def search(
         }[sort]
         next_cursor = _encode_cursor(sort, key)
     return EventPage(items=cards, next_cursor=next_cursor, total=total)
+
+
+async def nearest(
+    session: AsyncSession,
+    *,
+    locality_id: int | None = None,
+    lat: float | None = None,
+    lon: float | None = None,
+    tier: Tier = "official",
+    limit: int = NEAREST_LIMIT,
+) -> EventPage:
+    """Ближайшие будущие события в пределах NEAREST_KM, от близких к дальним, с distance_km."""
+    filters = EventFilters(
+        locality_id=locality_id,
+        lat=lat,
+        lon=lon,
+        radius_km=NEAREST_KM,
+        tier=tier,
+        sort="distance",
+        limit=min(limit, NEAREST_LIMIT),
+    )
+    page = await search(session, filters)
+    return page.model_copy(update={"next_cursor": None})
 
 
 async def _future_session_counts(

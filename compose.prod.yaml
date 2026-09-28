@@ -22,6 +22,8 @@ services:
   worker:
     environment:
       ENV: prod
+      # Воркер раз в 5 минут проверяет webhook-подписку и восстанавливает её.
+      BOT_MODE: webhook
       DATABASE_URL: ${DATABASE_URL:?Задай DATABASE_URL в .env}
 
   web:

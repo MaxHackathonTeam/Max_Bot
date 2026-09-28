@@ -25,7 +25,7 @@ def _https(url: str) -> bool:
     return parsed.scheme == "https" and bool(parsed.hostname)
 
 
-def _start(text: str, today: date, tz: ZoneInfo) -> datetime | None:
+def start_from_text(text: str, today: date, tz: ZoneInfo) -> datetime | None:
     """Первая явная дата + первое время после неё; только будущее."""
     dates = extract.find_explicit_dates(text, today)
     if not dates:
@@ -90,7 +90,7 @@ async def create_from_text(
     if phone:
         fields["contacts"] = phone
         auto.append("contacts")
-    start = _start(source, datetime.now(tz).date(), tz)
+    start = start_from_text(source, datetime.now(tz).date(), tz)
     if start is not None:
         fields["sessions"] = [SessionIn(starts_at=start)]
         auto.append("sessions")

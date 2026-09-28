@@ -2,34 +2,35 @@
 
 import re
 import uuid
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 from typing import Any, cast
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot import fsm, keyboards, render, texts
-from app.bot.notify import BotNotifier
-from app.core.config import Settings
+from app.bot import add_event, fsm, keyboards, render, texts
+from app.bot.core import Answer, BotContext, event_path
+from app.bot.core import Target as _Target
+from app.bot.core import get_user as _user
+from app.bot.core import message as _message
+from app.bot.core import notifier_of as _notifier
+from app.bot.core import send as _send
+from app.bot.core import target_of as _target_of
 from app.core.errors import AppError
-from app.db.session import SessionMaker
-from app.integrations.max import MaxClient
 from app.models.enums import ConsentDoc
 from app.models.users import User
+from app.schemas.events import EventCard, EventPage
 from app.schemas.users import MeUpdate
 from app.services import admin as admin_service
-from app.services import drafts as drafts_service
+from app.services import event_editor, search_parse, web_login
 from app.services import events as events_service
 from app.services import localities as localities_service
 from app.services import moderation as moderation_service
 from app.services import orgs as orgs_service
 from app.services import saved as saved_service
-from app.services import search_parse, web_login
 from app.services import users as users_service
 from app.services import verification as verification_service
 from app.services.categories import is_known
-from app.services.notify import Notifier
+
+__all__ = ["BotContext", "handle_update", "parse_start_payload"]
 
 log = structlog.get_logger(__name__)
 
@@ -56,99 +57,33 @@ def parse_start_payload(payload: str | None) -> str | None:
 
 FEED_PAGE = 5
 SAVED_PAGE = 10
+MY_PAGE = 10
 LOCALITY_OPTIONS = 5
-
-Answer = Callable[..., Awaitable[None]]
-
-
-@dataclass
-class BotContext:
-    settings: Settings
-    db: SessionMaker
-    max: MaxClient
-    states: fsm.StateStore = field(default_factory=fsm.MemoryStateStore)
-    # Сообщения другим пользователям (автору события, владельцу организации).
-    notifier: Notifier | None = None
-    # Redis приложения: коды входа на сайте (services/web_login).
-    redis: Any = None
-
-    async def web_app_name(self) -> str | None:
-        """Публичное имя бота для кнопки open_app: из env, иначе из GET /me."""
-        if self.settings.max_bot_username:
-            return self.settings.max_bot_username
-        username = (await self.max.get_me()).get("username")
-        return username if isinstance(username, str) and username else None
+# «Здесь пока нет событий»: ближайшие события ищем в этом радиусе.
+NEAREST_PAGE = 3
+TIERS = ("official", "community")
+_TIER_CODE = {v: k for k, v in keyboards.TIER_CODES.items()}
+# Похоже на анонс: дата «25.10» или время «18:00» в длинном тексте.
+_ANNOUNCE_RE = re.compile(r"\b\d{1,2}[./-]\d{1,2}\b|\b\d{1,2}:\d{2}\b")
+ANNOUNCE_MIN = 40
 
 
-@dataclass(frozen=True)
-class _Target:
-    """Собеседник в личном диалоге с ботом."""
-
-    max_user: dict[str, Any]
-    chat_id: int | None
-
-    @property
-    def user_id(self) -> int:
-        return int(self.max_user["user_id"])
-
-
-def _target_of(update: dict[str, Any]) -> _Target | None:
-    """Кому отвечать. None — не личный диалог (группы, каналы, другие боты)."""
-    kind = update.get("update_type")
-    if kind == "bot_started":
-        user = update.get("user") or {}
-        chat_id = update.get("chat_id")
-    elif kind == "message_created":
-        message = update.get("message") or {}
-        recipient = message.get("recipient") or {}
-        user = message.get("sender") or {}
-        if recipient.get("chat_type") != "dialog" or user.get("is_bot"):
+async def _place_name(ctx: BotContext, target: _Target) -> str | None:
+    async with ctx.db() as session:
+        user = await _user(session, target)
+        if user.locality_id is None:
             return None
-        chat_id = recipient.get("chat_id")
-    elif kind == "message_callback":
-        user = (update.get("callback") or {}).get("user") or {}
-        chat_id = ((update.get("message") or {}).get("recipient") or {}).get("chat_id")
-    else:
-        return None
-    if "user_id" not in user:
-        return None
-    return _Target(max_user=user, chat_id=chat_id)
-
-
-async def _send(
-    ctx: BotContext, target: _Target, text: str, keyboard: dict[str, Any] | None = None
-) -> None:
-    attachments = [keyboard] if keyboard else None
-    if target.chat_id is not None:
-        await ctx.max.send_message(chat_id=target.chat_id, text=text, attachments=attachments)
-    else:
-        await ctx.max.send_message(user_id=target.user_id, text=text, attachments=attachments)
+        locality = await localities_service.get_out(session, user.locality_id)
+    return locality.name if locality else None
 
 
 async def _send_menu(ctx: BotContext, target: _Target, text: str = texts.MENU) -> None:
-    await _send(ctx, target, text, keyboards.main_menu(await ctx.web_app_name()))
-
-
-def _legal_url(ctx: BotContext, doc: str) -> str:
-    return f"{ctx.settings.public_base_url.rstrip('/')}/legal/{doc}"
-
-
-def _message(text: str, keyboard: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Тело для замены сообщения через ответ на callback (CallbackAnswer.message)."""
-    return {"text": text, "attachments": [keyboard] if keyboard else []}
-
-
-async def _user(session: AsyncSession, target: _Target) -> User:
-    return await users_service.upsert_from_max(
-        session, target.max_user, dialog_chat_id=target.chat_id
-    )
+    place = await _place_name(ctx, target)
+    await _send(ctx, target, text, keyboards.main_menu(await ctx.web_app_name(), place))
 
 
 async def _send_consent(ctx: BotContext, target: _Target) -> None:
-    consent_text = texts.CONSENT.format(
-        terms_url=_legal_url(ctx, "terms"), privacy_url=_legal_url(ctx, "privacy")
-    )
-    await _send(ctx, target, consent_text, keyboards.consent())
+    await _send(ctx, target, ctx.consent_text(), keyboards.consent())
 
 
 # --- Онбординг: населённый пункт и интересы ------------------------------------------
@@ -187,11 +122,13 @@ async def _after_locality(ctx: BotContext, target: _Target, name: str) -> None:
             user = await _user(session, target)
         await _send(ctx, target, texts.ASK_INTERESTS, keyboards.interests(user.interests or []))
         return
-    await ctx.states.set(target.user_id, fsm.IDLE)
+    if state in (fsm.SETTINGS_LOCALITY, fsm.CITY_LOCALITY):
+        await ctx.states.set(target.user_id, fsm.IDLE)
     if state == fsm.SETTINGS_LOCALITY:
         await _send(ctx, target, saved)
         await _send_settings(ctx, target)
     else:
+        # Мастер «Добавить афишу» не сбрасываем: геопозиция могла прийти посреди него.
         await _send_menu(ctx, target, saved)
 
 
@@ -241,7 +178,101 @@ async def _interests_done(ctx: BotContext, target: _Target) -> None:
 
 # --- Подборки ------------------------------------------------------------------------
 
-_DATE_PRESETS: dict[str, events_service.DatePreset] = {"today": "today", "weekend": "weekend"}
+# Пресет подборки → фильтры ленты.
+_PRESETS: dict[str, dict[str, Any]] = {
+    "today": {"date_preset": "today"},
+    "weekend": {"date_preset": "weekend"},
+    "pushkin": {"pushkin": True},
+    "kids": {"categories": ["kids"]},
+    "free": {"free": True},
+    "all": {},
+}
+
+FeedPage = tuple[str, EventPage]
+
+
+def _feed_items(ctx: BotContext, cards: list[EventCard]) -> list[keyboards.FeedItem]:
+    return [
+        (c.id, c.next_session.id if c.next_session else None, ctx.site_url(f"/event/{c.id}"))
+        for c in cards
+    ]
+
+
+async def _send_pages(
+    ctx: BotContext,
+    target: _Target,
+    pages: list[FeedPage],
+    *,
+    title: str,
+    place: str,
+    radius: int,
+    shown_radius: int | None,
+    preset: str | None,
+    offset: int = 0,
+) -> None:
+    """Каждая лента доверия — отдельным сообщением (§5.2): official и community не смешиваются."""
+    web_app = await ctx.web_app_name()
+    for tier, page in pages:
+        text = render.feed(title, place, shown_radius, page.items, offset, tier=tier)
+        keyboard = keyboards.feed(
+            web_app,
+            _feed_items(ctx, page.items),
+            preset=preset,
+            radius=radius,
+            tier=_TIER_CODE[tier],
+            next_cursor=page.next_cursor,
+            offset=offset,
+        )
+        await _send(ctx, target, text, keyboard)
+
+
+async def _search_tiers(ctx: BotContext, tiers: tuple[str, ...], **filters: Any) -> list[FeedPage]:
+    pages: list[FeedPage] = []
+    async with ctx.db() as session:
+        for tier in tiers:
+            page = await events_service.search(
+                session,
+                events_service.EventFilters(tier=cast(events_service.Tier, tier), **filters),
+            )
+            if page.items:
+                pages.append((tier, page))
+    return pages
+
+
+async def _send_empty(
+    ctx: BotContext,
+    target: _Target,
+    *,
+    locality_id: int,
+    place: str,
+    preset: str | None,
+    radius: int,
+) -> None:
+    """«Здесь пока нет событий» + ближайшие с расстоянием + «Добавь первое»."""
+    nearest: list[FeedPage] = []
+    async with ctx.db() as session:
+        for tier in TIERS:
+            page = await events_service.nearest(
+                session,
+                locality_id=locality_id,
+                tier=cast(events_service.Tier, tier),
+                limit=NEAREST_PAGE,
+            )
+            if page.items:
+                nearest.append((tier, page))
+    wider = next((r for r in events_service.RADIUS_CHOICES if r > radius), None)
+    text = texts.EMPTY_HERE if nearest else f"{texts.EMPTY_HERE}\n\n{texts.EMPTY_NOWHERE}"
+    await _send(ctx, target, text, keyboards.empty_here(preset=preset, wider=wider))
+    await _send_pages(
+        ctx,
+        target,
+        nearest,
+        title=texts.EMPTY_NEAREST,
+        place=place,
+        radius=radius,
+        shown_radius=None,
+        preset=None,
+    )
 
 
 async def _send_feed(
@@ -251,113 +282,141 @@ async def _send_feed(
     radius: int | None = None,
     offset: int = 0,
     cursor: str | None = None,
+    tier: str | None = None,
 ) -> None:
+    """Подборка по пресету. tier — только одна лента («Ещё» в ней); иначе обе по очереди."""
     async with ctx.db() as session:
         user = await _user(session, target)
         if user.locality_id is None:
             await _ask_locality(ctx, target, fsm.ONBOARDING_LOCALITY, texts.NEED_LOCALITY)
             return
         radius = radius or user.radius_km
-        locality = await localities_service.get_out(session, user.locality_id)
-        filters = events_service.EventFilters(
-            locality_id=user.locality_id,
-            radius_km=radius,
-            date_preset=_DATE_PRESETS.get(preset),
-            pushkin=preset == "pushkin",
-            # Подборка бота — только «Официальные»: ленты доверия не смешиваются.
-            tier="official",
-            sort="date",
-            cursor=cursor,
-            limit=FEED_PAGE,
-        )
-        page = await events_service.search(session, filters)
-    web_app = await ctx.web_app_name()
-    title = texts.FEED_TITLES[preset]
-    if not page.items:
-        wider = next((r for r in events_service.RADIUS_CHOICES if r > radius), None)
-        text = texts.FEED_EMPTY.format(title=title, radius=radius)
-        await _send(ctx, target, text, keyboards.feed_empty(web_app, preset=preset, wider=wider))
-        return
+        locality_id = user.locality_id
+        locality = await localities_service.get_out(session, locality_id)
     place = locality.name if locality else "—"
-    text = render.feed(title, place, radius, page.items, offset)
-    items = [(c.id, c.next_session.id if c.next_session else None) for c in page.items]
-    keyboard = keyboards.feed(
-        web_app,
-        items,
-        preset=preset,
-        radius=radius,
-        next_cursor=page.next_cursor,
-        offset=offset,
+    pages = await _search_tiers(
+        ctx,
+        (tier,) if tier else TIERS,
+        locality_id=locality_id,
+        radius_km=radius,
+        sort="date",
+        cursor=cursor,
+        limit=FEED_PAGE,
+        **_PRESETS[preset],
     )
-    await _send(ctx, target, text, keyboard)
-
-
-async def _on_phrase(ctx: BotContext, target: _Target, phrase: str) -> None:
-    """FR-CAT-8: распознать фильтры, показать чипсы и применить FTS fallback."""
-    async with ctx.db() as session:
-        user = await _user(session, target)
-        if user.locality_id is None:
-            await _send(ctx, target, texts.UNKNOWN_TEXT, keyboards.menu_button())
+    if not pages:
+        if cursor:
+            await _send(ctx, target, texts.FEED_NO_MORE, keyboards.find_menu())
             return
-        parsed = await search_parse.parse(session, phrase)
-        # Ни одного признака запроса — это не поиск, а просто сообщение.
-        if parsed.fallback:
-            await _send(ctx, target, texts.UNKNOWN_TEXT, keyboards.menu_button())
-            return
-        filters = events_service.EventFilters(
-            locality_id=parsed.locality_id or user.locality_id,
-            radius_km=user.radius_km,
-            date_preset=cast(events_service.DatePreset | None, parsed.date),
-            date_from=parsed.date_from,
-            date_to=parsed.date_to,
-            time_from=parsed.time_from,
-            free=parsed.free,
-            price_max=parsed.price_max,
-            pushkin=parsed.pushkin,
-            categories=list(parsed.categories),
-            q=parsed.q,
-            tier="official",
-            limit=FEED_PAGE,
-        )
-        page = await events_service.search(session, filters)
-        locality = await localities_service.get_out(
-            session, filters.locality_id or user.locality_id
-        )
-    chips = " · ".join(parsed.chips) or "текстовый поиск"
-    if not page.items:
-        await _send(
-            ctx,
-            target,
-            f"Понял так: {chips}\n\nНичего не нашёл — попробуй изменить запрос.",
-            keyboards.menu_button(),
+        await _send_empty(
+            ctx, target, locality_id=locality_id, place=place, preset=preset, radius=radius
         )
         return
-    await _send(
+    await _send_pages(
         ctx,
         target,
-        render.feed(
-            f"Понял так: {chips}", locality.name if locality else "—", user.radius_km, page.items
-        ),
-        keyboards.feed(
-            await ctx.web_app_name(),
-            [(c.id, c.next_session.id if c.next_session else None) for c in page.items],
-            preset=parsed.date or "today",
-            radius=user.radius_km,
-            next_cursor=page.next_cursor,
-        ),
+        pages,
+        title=texts.FEED_TITLES[preset],
+        place=place,
+        radius=radius,
+        shown_radius=radius,
+        preset=preset,
+        offset=offset,
     )
 
 
-def _parse_feed(args: list[str]) -> tuple[str, int, int, str | None] | None:
-    """feed:<preset>:<radius>:<offset>[:<cursor>] → аргументы; None, если payload битый."""
-    if len(args) not in (3, 4) or args[0] not in texts.FEED_TITLES:
+async def _send_find(ctx: BotContext, target: _Target) -> None:
+    await ctx.states.set(target.user_id, fsm.FIND_QUERY)
+    await _send(ctx, target, texts.FIND_PROMPT, keyboards.find_menu())
+
+
+async def _on_phrase(ctx: BotContext, target: _Target, phrase: str, *, explicit: bool) -> None:
+    """FR-CAT-8: распознать фильтры, показать чипсы и применить FTS fallback.
+
+    explicit — текст пришёл после /find: даже без признаков запроса это поиск по словам.
+    """
+    async with ctx.db() as session:
+        user = await _user(session, target)
+        parsed = await search_parse.parse(session, phrase)
+        locality_id = parsed.locality_id or user.locality_id
+        locality = await localities_service.get_out(session, locality_id) if locality_id else None
+    # Ни одного признака запроса — это не поиск, а просто сообщение.
+    if parsed.fallback and not explicit:
+        await _send_menu(ctx, target, texts.UNKNOWN_TEXT)
+        return
+    if locality_id is None:
+        await _ask_locality(ctx, target, fsm.ONBOARDING_LOCALITY, texts.NEED_LOCALITY)
+        return
+    pages = await _search_tiers(
+        ctx,
+        TIERS,
+        locality_id=locality_id,
+        radius_km=user.radius_km,
+        date_preset=cast(events_service.DatePreset | None, parsed.date),
+        date_from=parsed.date_from,
+        date_to=parsed.date_to,
+        time_from=parsed.time_from,
+        free=parsed.free,
+        price_max=parsed.price_max,
+        pushkin=parsed.pushkin,
+        categories=list(parsed.categories),
+        q=parsed.q or (phrase if parsed.fallback else None),
+        limit=FEED_PAGE,
+    )
+    chips = " · ".join(parsed.chips) or texts.FIND_TEXT_SEARCH
+    if not pages:
+        text = texts.FIND_NOTHING.format(chips=chips)
+        await _send(ctx, target, text, keyboards.find_menu())
+        return
+    await _send_pages(
+        ctx,
+        target,
+        pages,
+        title=texts.FIND_UNDERSTOOD.format(chips=chips),
+        place=locality.name if locality else "—",
+        radius=user.radius_km,
+        shown_radius=user.radius_km,
+        preset=None,
+    )
+
+
+def _parse_feed(args: list[str]) -> tuple[str, int, str, int, str | None] | None:
+    """feed:<preset>:<radius>:<o|c>:<offset>[:<cursor>] → аргументы; None, если payload битый.
+
+    Старые кнопки без ленты (feed:<preset>:<radius>:<offset>[:<cursor>]) — это «Официальные».
+    """
+    if len(args) >= 3 and args[2] not in keyboards.TIER_CODES:
+        args = [args[0], args[1], "o", *args[2:]]
+    if len(args) not in (4, 5) or args[0] not in _PRESETS:
         return None
-    if not (args[1].isdigit() and args[2].isdigit()):
+    if not (args[1].isdigit() and args[3].isdigit()):
         return None
-    radius, offset = int(args[1]), int(args[2])
+    radius, offset = int(args[1]), int(args[3])
     if radius not in events_service.RADIUS_CHOICES or offset > 1000:
         return None
-    return args[0], radius, offset, args[3] if len(args) == 4 else None
+    tier = keyboards.TIER_CODES[args[2]]
+    return args[0], radius, tier, offset, args[4] if len(args) == 5 else None
+
+
+# --- Мои афиши -----------------------------------------------------------------------
+
+
+async def _send_my(ctx: BotContext, target: _Target) -> None:
+    async with ctx.db() as session:
+        user = await _user(session, target)
+        items = (await event_editor.my_events(session, user, None))[:MY_PAGE]
+    if not items:
+        await _send(ctx, target, texts.MY_EMPTY, keyboards.my_events(None, []))
+        return
+    links = [(i.id, ctx.site_url(event_path(i.id, i.status))) for i in items]
+    await _send(
+        ctx, target, render.my_events(items), keyboards.my_events(await ctx.web_app_name(), links)
+    )
+
+
+async def _send_myid(ctx: BotContext, target: _Target) -> None:
+    role = texts.MYID_ADMIN if _is_admin(ctx, target) else texts.MYID_USER
+    await _send(ctx, target, texts.MYID.format(user_id=target.user_id, role=role))
 
 
 # --- «Пойду» -------------------------------------------------------------------------
@@ -489,12 +548,6 @@ async def _on_contact(ctx: BotContext, target: _Target, payload: dict[str, Any])
     }[result]
     keyboard = keyboards.phone_request() if result in ("bad_signature", "not_own") else None
     await _send(ctx, target, reply, keyboard)
-
-
-def _notifier(ctx: BotContext) -> Notifier:
-    if ctx.notifier is not None:
-        return ctx.notifier
-    return BotNotifier(ctx.db, ctx.max, ctx.settings.max_bot_username)
 
 
 # --- Очередь админа (§6 п. 5) ---------------------------------------------------------
@@ -652,27 +705,27 @@ async def _on_start(ctx: BotContext, target: _Target, payload: str | None) -> No
     elif payload:
         log.info("bot_start_payload_ignored", payload_len=len(payload))
 
-    if consented:
-        await _send_menu(ctx, target, greeting)
-        if user.locality_id is None:
-            await _ask_locality(ctx, target, fsm.ONBOARDING_LOCALITY)
-        return
-    await _send(ctx, target, greeting)
-    await _send_consent(ctx, target)
-    await _send_menu(ctx, target)
+    # /start — всегда с чистого листа: брошенный мастер или поиск не мешают.
+    await ctx.states.set(target.user_id, fsm.IDLE)
+    await _send_menu(ctx, target, greeting)
+    if user.locality_id is None:
+        # Смотреть афишу можно без согласия (§4) — сразу предлагаем выбрать пункт.
+        await _ask_locality(ctx, target, fsm.ONBOARDING_LOCALITY)
+    elif not consented:
+        await _send_consent(ctx, target)
 
 
 async def _ask_web_login(ctx: BotContext, target: _Target, code: str) -> None:
     async with ctx.db() as session:
-        await users_service.upsert_from_max(
+        user = await users_service.upsert_from_max(
             session, target.max_user, dialog_chat_id=target.chat_id, bot_started=True
         )
     if ctx.redis is None:
         await _send(ctx, target, texts.WEB_LOGIN_UNAVAILABLE, keyboards.menu_button())
         return
-    await _send(
-        ctx, target, texts.WEB_LOGIN_CONFIRM.format(code=code), keyboards.web_login_confirm(code)
-    )
+    name = " ".join(p for p in (user.first_name, user.last_name) if p) or texts.WEB_LOGIN_NO_NAME
+    text = texts.WEB_LOGIN_CONFIRM.format(name=name, code=code)
+    await _send(ctx, target, text, keyboards.web_login_confirm(code))
 
 
 async def _confirm_web_login(ctx: BotContext, target: _Target, code: str, answer: Answer) -> None:
@@ -723,14 +776,53 @@ async def _on_message(ctx: BotContext, target: _Target, update: dict[str, Any]) 
         linked_body = linked.get("message", {}).get("body", {}) if isinstance(linked, dict) else {}
         text = str(linked_body.get("text") or "").strip()
     command, _, arg = text.partition(" ")
-    command = command.split("@", 1)[0].lower()
-    if command == "/start":
-        await _on_start(ctx, target, arg.strip() or None)
-    elif command == "/menu":
+    command = command.split("@", 1)[0].lower() if command.startswith("/") else ""
+    if command:
+        await _on_command(ctx, target, command, arg.strip())
+        return
+    state = await ctx.states.get(target.user_id)
+    if add_event.is_active(state):
+        await add_event.on_message(ctx, target, state, text, add_event.image_url_of(body))
+    elif not text:
+        await _send_menu(ctx, target, texts.UNKNOWN_TEXT)
+    elif state.startswith(fsm.ADMIN_REASON + ":"):
+        await _on_admin_reason(ctx, target, state, text)
+    elif state in (fsm.ONBOARDING_LOCALITY, fsm.SETTINGS_LOCALITY, fsm.CITY_LOCALITY):
+        await _search_locality(ctx, target, text)
+    elif forwarded or (len(text) >= ANNOUNCE_MIN and _ANNOUNCE_RE.search(text)):
+        # Похоже на анонс — мастер разберёт его и покажет превью.
         await ctx.states.set(target.user_id, fsm.IDLE)
+        await add_event.begin(ctx, target, text)
+    else:
+        explicit = state == fsm.FIND_QUERY
+        if explicit:
+            await ctx.states.set(target.user_id, fsm.IDLE)
+        await _on_phrase(ctx, target, text, explicit=explicit)
+
+
+async def _on_command(ctx: BotContext, target: _Target, command: str, arg: str) -> None:
+    if command != "/start":
+        # Команда прерывает незаконченный шаг (мастер, ввод пункта, поиск).
+        await ctx.states.set(target.user_id, fsm.IDLE)
+    if command == "/start":
+        await _on_start(ctx, target, arg or None)
+    elif command == "/menu":
         await _send_menu(ctx, target)
     elif command == "/help":
         await _send(ctx, target, texts.HELP, keyboards.menu_button())
+    elif command == "/find":
+        if arg:
+            await _on_phrase(ctx, target, arg, explicit=True)
+        else:
+            await _send_find(ctx, target)
+    elif command == "/add":
+        await add_event.begin(ctx, target, arg or None)
+    elif command == "/city":
+        await _ask_locality(ctx, target, fsm.CITY_LOCALITY)
+    elif command == "/my":
+        await _send_my(ctx, target)
+    elif command == "/myid":
+        await _send_myid(ctx, target)
     elif command in _FEED_COMMANDS:
         await _send_feed(ctx, target, _FEED_COMMANDS[command])
     elif command == "/saved":
@@ -743,35 +835,8 @@ async def _on_message(ctx: BotContext, target: _Target, update: dict[str, Any]) 
         await _send_org_menu(ctx, target)
     elif command == "/queue":
         await _send_queue(ctx, target)
-    elif text and (state := await ctx.states.get(target.user_id)).startswith(
-        fsm.ADMIN_REASON + ":"
-    ):
-        await _on_admin_reason(ctx, target, state, text)
-    elif text and await ctx.states.get(target.user_id) in (
-        fsm.ONBOARDING_LOCALITY,
-        fsm.SETTINGS_LOCALITY,
-    ):
-        await _search_locality(ctx, target, text)
-    elif text and (
-        forwarded
-        or (len(text) >= 40 and re.search(r"\b\d{1,2}[./-]\d{1,2}\b|\b\d{1,2}:\d{2}\b", text))
-    ):
-        async with ctx.db() as session:
-            user = await _user(session, target)
-            event = await drafts_service.create_from_text(session, user, text, None)
-        web_app = await ctx.web_app_name()
-        await _send(
-            ctx,
-            target,
-            "Сделал черновик из анонса. Проверь поля и дополни их в приложении.",
-            keyboards.open_link(web_app, f"draft_{event.id}")
-            if web_app
-            else keyboards.menu_button(),
-        )
-    elif text:
-        await _on_phrase(ctx, target, text)
     else:
-        await _send_menu(ctx, target, texts.UNKNOWN_TEXT)
+        await _send_menu(ctx, target, texts.UNKNOWN_COMMAND)
 
 
 def _two_ints(args: list[str]) -> tuple[int, int] | None:
@@ -811,6 +876,21 @@ async def _on_callback(
         await answer()
         await ctx.states.set(target.user_id, fsm.IDLE)
         await _send_menu(ctx, target)
+    elif payload == keyboards.CB_FIND:
+        await answer()
+        await _send_find(ctx, target)
+    elif payload == keyboards.CB_ADD:
+        await answer()
+        await ctx.states.set(target.user_id, fsm.IDLE)
+        await add_event.begin(ctx, target)
+    elif payload == keyboards.CB_CITY:
+        await answer()
+        await _ask_locality(ctx, target, fsm.CITY_LOCALITY)
+    elif payload == keyboards.CB_MY:
+        await answer()
+        await _send_my(ctx, target)
+    elif prefix == keyboards.P_ADD:
+        await add_event.on_callback(ctx, target, args, answer)
     elif payload in keyboards.FEED_BY_MENU:
         await answer()
         await _send_feed(ctx, target, keyboards.FEED_BY_MENU[payload])
@@ -858,13 +938,16 @@ async def _on_callback(
         await _update_settings(ctx, target, {"radius_km": int(args[0])}, answer)
     elif prefix == keyboards.P_FEED and (parsed := _parse_feed(args)) is not None:
         await answer()
-        preset, radius, offset, cursor = parsed
+        preset, radius, tier, offset, cursor = parsed
         try:
-            await _send_feed(ctx, target, preset, radius, offset, cursor)
+            await _send_feed(ctx, target, preset, radius, offset, cursor, tier if cursor else None)
         except AppError as exc:
             if exc.code != "invalid_cursor":
                 raise
             await _send(ctx, target, texts.FEED_EXPIRED_TOAST, keyboards.menu_button())
+    elif prefix == keyboards.P_WEB_LOGIN and len(args) == 2 and args[0] == "no":
+        await answer()
+        await _send(ctx, target, texts.WEB_LOGIN_DENIED, keyboards.menu_button())
     elif (
         prefix == keyboards.P_WEB_LOGIN
         and len(args) == 1
@@ -876,8 +959,10 @@ async def _on_callback(
     elif prefix == keyboards.P_UNSAVE and (ids := _two_ints(args)) is not None:
         await _unsave(ctx, target, *ids, answer)
     else:
+        # Кнопка из старого сообщения: отвечаем и показываем меню, а не молчим.
         log.info("bot_unknown_callback", payload_len=len(payload))
-        await answer()
+        await answer(texts.FEED_EXPIRED_TOAST)
+        await _send_menu(ctx, target)
 
 
 async def handle_update(ctx: BotContext, update: dict[str, Any]) -> None:
