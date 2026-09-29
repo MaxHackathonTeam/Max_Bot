@@ -4,6 +4,7 @@
 и фильтрует ленту по ней — так соседние тесты не видят чужих событий.
 """
 
+import itertools
 import random
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -20,9 +21,21 @@ from app.services.localities import wkt_point
 KM_PER_DEG_LAT = 111.0
 
 
+# Сетка в малонаселённой зоне: 8 рядов по 1° широты (111 км) × 21 столбец по 3° долготы
+# (≥ 100 км на 62–70° с. ш.). Каждый вызов берёт свою ячейку, поэтому области разных тестов
+# не пересекаются даже в радиусе 50 км (случайные точки иногда совпадали — флейк CI).
+_AREA_ROWS, _AREA_COLS = 8, 21
+_areas = itertools.count(random.randrange(_AREA_ROWS * _AREA_COLS))
+
+
 def random_area() -> tuple[float, float]:
-    """Точка в малонаселённой зоне; области разных тестов почти не пересекаются в 50 км."""
-    return random.uniform(62.0, 70.0), random.uniform(95.0, 160.0)
+    """Центр свободной ячейки ±5 км; до 168 вызовов за прогон ячейки не повторяются."""
+    cell = next(_areas) % (_AREA_ROWS * _AREA_COLS)
+    row, col = divmod(cell, _AREA_COLS)
+    return (
+        62.5 + row + random.uniform(-0.05, 0.05),
+        96.5 + 3 * col + random.uniform(-0.1, 0.1),
+    )
 
 
 def shift_north(lat: float, lon: float, km: float) -> tuple[float, float]:
