@@ -36,6 +36,23 @@ def mask_pii(_: Any, __: str, event_dict: MutableMapping[str, Any]) -> Mapping[s
     return {key: _mask(value, key) for key, value in event_dict.items()}
 
 
+class HideJobArgs(logging.Filter):
+    """arq пишет аргументы задач и результат («→ send_user_message(123, 'текст…')») — это ПДн.
+
+    Оставляем время, id и имя задачи, аргументы и результат заменяем на «…».
+    """
+
+    _MARKERS = ("→ %s(%s)", "← %s ● %s")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str) and isinstance(record.args, tuple):
+            if any(m in record.msg for m in self._MARKERS) and len(record.args) >= 3:
+                args = list(record.args)
+                args[2] = "…"
+                record.args = tuple(args)
+        return True
+
+
 def configure_logging(level: str = "INFO") -> None:
     log_level = logging.getLevelNamesMapping().get(level.upper(), logging.INFO)
     shared: list[structlog.types.Processor] = [
@@ -71,5 +88,6 @@ def configure_logging(level: str = "INFO") -> None:
     for name in ("uvicorn", "uvicorn.error", "arq"):
         logging.getLogger(name).handlers = []
         logging.getLogger(name).propagate = True
+    logging.getLogger("arq.worker").addFilter(HideJobArgs())
     # Запросы логирует RequestIdMiddleware, access-лог uvicorn дублировал бы их.
     logging.getLogger("uvicorn.access").disabled = True

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot import keyboards, texts
 from app.bot.dispatcher import BotContext, handle_update, parse_start_payload
 from app.bot.fsm import MemoryStateStore
-from app.bot.notify import BotNotifier, notify_admins_new_event
+from app.bot.notify import BotNotifier
 from app.core.config import Settings
 from app.core.jobs import MemoryJobQueue
 from app.integrations.max import MaxClient
@@ -699,51 +699,6 @@ async def test_add_requires_consent(bot: BotContext, max_api: respx.MockRouter) 
     ask = _sent(max_api)[-1]
     assert ask["text"].startswith(texts.ADD_NEED_CONSENT)
     assert _buttons(ask)[0]["payload"] == keyboards.CB_CONSENT_ACCEPT
-
-
-async def test_admins_notified_about_new_event(
-    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
-) -> None:
-    lat, lon = random_area()
-    locality = await make_locality(db_session, _unique("Модерово"), lat, lon)
-    author = User(max_user_id=random_max_id(), first_name="Ира", channel="max")
-    db_session.add(author)
-    await db_session.flush()
-    event = await make_event(
-        db_session,
-        locality,
-        title="Ярмарка",
-        trust_tier=TrustTier.community,
-        status="pending",
-        author_user_id=author.id,
-        moderation_reason="ссылка на сторонний сайт",
-    )
-    await db_session.commit()
-
-    settings = bot.settings.model_copy(
-        update={"admin_max_user_ids": [777, 778], "public_base_url": "https://afisha.test"}
-    )
-    max_api["send"].mock(
-        side_effect=[
-            httpx.Response(200, json={"message": {}}),
-            httpx.Response(500, json={"code": "boom", "message": "boom"}),
-        ]
-    )
-    delivered = await notify_admins_new_event(bot.db, bot.max, settings, event.id)
-    # Ошибка у одного модератора не мешает остальным.
-    assert delivered == 1
-    calls = max_api["send"].calls
-    assert [c.request.url.params["user_id"] for c in calls] == ["777", "778"]
-    message = json.loads(calls[0].request.content)
-    assert "Ярмарка" in message["text"] and "Ира" in message["text"]
-    assert "ссылка на сторонний сайт" in message["text"]
-    assert _buttons(message) == [
-        {
-            "type": "link",
-            "text": texts.ADMIN_CHECK_BUTTON,
-            "url": f"https://afisha.test/moderation/{event.id}",
-        }
-    ]
 
 
 async def test_queued_messages_dedup_and_guests_skipped(

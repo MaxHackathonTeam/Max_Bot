@@ -256,6 +256,7 @@ async def run_checks(
     done = await try_finalize(session, request, org)
     await session.commit()
     if done:
+        await notifier.moderation_closed("v", request.id)
         await _notify_done(notifier, request, org)
     else:
         reasons = [step.message for step in steps_of(request) if step.status == "failed"]
@@ -466,6 +467,8 @@ async def start(
         },
     )
     await session.commit()
+    # Каждая новая заявка организации — модераторам в бот, любым способом проверки.
+    await notifier.alert_moderators("v", request.id)
     if body.method == VerificationMethod.manual:
         await notifier.send(
             user.id, texts.VERIFY_MANUAL_QUEUED.format(org=org.name), f"org_{org.id}"
@@ -520,7 +523,12 @@ async def decide(
     if request is None:
         raise AppError("verification_not_found", "Заявка не найдена", status_code=404)
     if request.status != VerificationStatus.pending:
-        raise AppError("already_decided", "По заявке уже есть решение", status_code=409)
+        raise AppError(
+            "already_decided",
+            "По заявке уже есть решение",
+            status_code=409,
+            details={"status": str(request.status)},
+        )
     org = await session.get(Organization, request.org_id, with_for_update=True)
     if org is None:
         raise AppError("org_not_found", "Организация не найдена", status_code=404)
@@ -554,6 +562,7 @@ async def decide(
     elif org.verification_status == VerificationStatus.pending:
         org.verification_status = VerificationStatus.rejected
     await session.commit()
+    await notifier.moderation_closed("v", request.id)
     if approve:
         await _notify_done(notifier, request, org)
     else:

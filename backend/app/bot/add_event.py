@@ -169,6 +169,12 @@ class _ExceptAuthor:
         if user_id != self._author_id:
             await self._inner.send(user_id, text, deeplink)
 
+    async def alert_moderators(self, kind: str, entity_id: int) -> None:
+        await self._inner.alert_moderators(kind, entity_id)
+
+    async def moderation_closed(self, kind: str, entity_id: int) -> None:
+        await self._inner.moderation_closed(kind, entity_id)
+
 
 # --- Вход в мастер -----------------------------------------------------------------------
 

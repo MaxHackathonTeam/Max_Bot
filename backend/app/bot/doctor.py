@@ -1,4 +1,8 @@
-"""Диагностика «бот молчит»: конфигурация, GET /me, GET /subscriptions, статус проверки.
+"""Диагностика «бот молчит» по всей цепочке MAX → Caddy → /bot/webhook → очередь → воркер → MAX.
+
+Проверяет: конфигурацию, TLS и связь с MAX API (GET /me), подписку (GET /subscriptions),
+что /bot/webhook доступен снаружи (без секрета ждём 401), что воркер жив (health-check arq)
+и разбирает очередь, статус последней проверки подписки.
 
 На сервере:
     docker compose -f compose.yaml -f compose.prod.yaml exec api python -m app.bot.doctor
@@ -15,13 +19,18 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from arq.constants import default_queue_name, health_check_key_suffix
 from redis.asyncio import Redis
 
 from app.bot.poller import HEARTBEAT_KEY
 from app.bot.subscriptions import check_webhook, config_problems, load_status, sync_commands
 from app.core.config import Settings, get_settings
 from app.integrations.max import MaxClient
-from app.integrations.max.client import UPDATE_TYPES
+from app.integrations.max.client import UPDATE_TYPES, describe_error
+
+WORKER_HEALTH_KEY = default_queue_name + health_check_key_suffix
+# Столько задач в очереди без живого воркера — точно «webhook принимает, ответа нет».
+QUEUE_BACKLOG = 20
 
 
 def _ts(value: Any) -> str:
@@ -68,7 +77,50 @@ async def _poller_problems(redis: Redis) -> list[str]:
     return []
 
 
-async def diagnose(settings: Settings, client: MaxClient | None, redis: Redis | None) -> list[str]:
+async def _worker_problems(redis: Redis) -> list[str]:
+    """Воркер arq раз в health_check_interval пишет ключ с TTL: нет ключа — воркер не работает."""
+    try:
+        health = await redis.get(WORKER_HEALTH_KEY)
+        queued = int(await redis.zcard(default_queue_name))
+    except Exception as exc:
+        return [f"Redis недоступен ({type(exc).__name__}) — не проверить воркер и очередь"]
+    if isinstance(health, bytes):
+        health = health.decode()
+    print(f"Воркер: {health or 'нет health-check'}; в очереди задач: {queued}")
+    problems: list[str] = []
+    if health is None:
+        problems.append(
+            "Воркер не отмечается в Redis — обновления из webhook копятся в очереди без ответа "
+            "(docker compose ... ps worker, logs worker)"
+        )
+    elif queued >= QUEUE_BACKLOG:
+        problems.append(f"В очереди {queued} задач — воркер не успевает или завис")
+    return problems
+
+
+async def _external_problems(settings: Settings) -> list[str]:
+    """POST на публичный URL webhook без секрета: 401 — Caddy и API на месте."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as http:
+            response = await http.post(settings.webhook_url, json={})
+    except Exception as exc:
+        return [f"{settings.webhook_url} недоступен снаружи ({type(exc).__name__}): DNS/TLS/Caddy"]
+    print(f"Webhook снаружи: {response.status_code} (ожидается 401)")
+    if response.status_code != 401:
+        return [
+            f"{settings.webhook_url} отвечает {response.status_code}, а не 401 — "
+            "Caddy не проксирует /bot/* на api или домен не тот"
+        ]
+    return []
+
+
+async def diagnose(
+    settings: Settings,
+    client: MaxClient | None,
+    redis: Redis | None,
+    *,
+    check_external: bool = False,
+) -> list[str]:
     """Печатает отчёт и возвращает список проблем."""
     problems: list[str] = []
     print(f"Режим бота (BOT_MODE): {settings.bot_mode}")
@@ -81,6 +133,10 @@ async def diagnose(settings: Settings, client: MaxClient | None, redis: Redis | 
         problems.append("ADMIN_MAX_USER_IDS пуст — некому модерировать и получать заявки")
     if settings.bot_mode == "webhook":
         problems += config_problems(settings)
+        if redis is not None:
+            problems += await _worker_problems(redis)
+        if check_external and settings.webhook_url.startswith("https://"):
+            problems += await _external_problems(settings)
     elif redis is not None:
         problems += await _poller_problems(redis)
     if client is None:
@@ -91,10 +147,13 @@ async def diagnose(settings: Settings, client: MaxClient | None, redis: Redis | 
     try:
         me = await client.get_me()
     except httpx.TransportError as exc:
-        problems.append(
-            f"GET /me: нет связи с {settings.max_api_base} ({type(exc).__name__}) — "
-            "проверь интернет, VPN/прокси и DNS; токен тут ни при чём"
-        )
+        if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+            problems.append(f"GET /me: {describe_error(exc)}")
+        else:
+            problems.append(
+                f"GET /me: нет связи с {settings.max_api_base} ({type(exc).__name__}) — "
+                "проверь интернет, VPN/прокси и DNS; токен тут ни при чём"
+            )
         return problems
     except Exception as exc:
         problems.append(f"GET /me не удался: {type(exc).__name__} — проверь MAX_BOT_TOKEN")
@@ -145,7 +204,7 @@ async def main(argv: list[str] | None = None) -> int:
             if client is not None:
                 synced = await sync_commands(client)
                 print(f"Команды бота: {'обновлены' if synced else 'не удалось обновить'}")
-        problems = await diagnose(settings, client, redis)
+        problems = await diagnose(settings, client, redis, check_external=True)
     finally:
         if client is not None:
             await client.aclose()

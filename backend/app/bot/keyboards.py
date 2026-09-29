@@ -335,16 +335,6 @@ def my_events(web_app: str | None, items: Sequence[tuple[int, str | None]]) -> d
     return kb.inline_keyboard(rows)
 
 
-def admin_new_event(url: str | None, web_app: str | None, event_id: int) -> dict[str, Any] | None:
-    if url:
-        return kb.inline_keyboard([[kb.link(texts.ADMIN_CHECK_BUTTON, url)]])
-    if web_app:
-        return kb.inline_keyboard(
-            [[kb.open_app(texts.ADMIN_CHECK_BUTTON, web_app, f"ev_{event_id}")]]
-        )
-    return None
-
-
 def link_and_menu(label: str, url: str | None, web_app: str | None, payload: str) -> dict[str, Any]:
     rows: list[list[kb.Button]] = []
     if url:
@@ -429,6 +419,28 @@ def add_preview(steps: Sequence[str]) -> dict[str, Any]:
     rows = [[kb.callback(texts.ADD_SUBMIT, CB_ADD_SEND)]]
     rows += [edits[i : i + 2] for i in range(0, len(edits), 2)]
     return kb.inline_keyboard(rows + _add_nav())
+
+
+# --- Модерация: уведомления админам ---------------------------------------------------------
+
+P_MOD = "mod"  # mod:<e|v>:<id>:<approve|reject> — кнопки в уведомлении модератору
+
+
+def moderation_alert(kind: str, entity_id: int, url: str | None) -> dict[str, Any]:
+    rows: list[list[kb.Button]] = [
+        [
+            kb.callback(texts.MOD_APPROVE, f"{P_MOD}:{kind}:{entity_id}:approve"),
+            kb.callback(texts.MOD_REJECT, f"{P_MOD}:{kind}:{entity_id}:reject"),
+        ]
+    ]
+    if url:
+        rows.append([kb.link(texts.MOD_OPEN_SITE, url)])
+    return kb.inline_keyboard(rows)
+
+
+def moderation_closed(url: str | None) -> dict[str, Any] | None:
+    """После решения кнопки убираем, ссылку на карточку оставляем."""
+    return kb.inline_keyboard([[kb.link(texts.MOD_OPEN_SITE, url)]]) if url else None
 
 
 # --- Профиль организации ------------------------------------------------------------------

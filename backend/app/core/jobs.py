@@ -14,6 +14,9 @@ CHECK_VERIFICATION = "check_verification"
 SEND_USER_MESSAGE = "send_user_message"
 # Кнопка «Поделиться контактом» в боте после заявки на проверку способом Б.
 REQUEST_PHONE = "request_phone"
+# Заявка на модерацию → сообщения модераторам; решение принято → правка их сообщений.
+ALERT_MODERATORS = "alert_moderators"
+CLOSE_MODERATION = "close_moderation"
 
 
 class JobQueue(Protocol):

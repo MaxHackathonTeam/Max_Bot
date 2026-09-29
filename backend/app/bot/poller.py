@@ -81,7 +81,10 @@ async def main() -> None:
             )
             await asyncio.Event().wait()
             return
-        await drop_webhooks(client)
+        if subs:
+            # Сюда попадаем только с BOT_POLLER_TAKEOVER=1: снимаем webhook осознанно.
+            log.warning("bot_poller_takeover", subscriptions=len(subs))
+            await drop_webhooks(client)
         await sync_commands(client)
         log.info("bot_poller_started")
         await poll(ctx, asyncio.Event())

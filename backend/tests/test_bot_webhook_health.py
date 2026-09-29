@@ -3,6 +3,7 @@
 import json
 
 import httpx
+import pytest
 import respx
 from pydantic import SecretStr
 from structlog.testing import capture_logs
@@ -88,7 +89,7 @@ async def test_max_api_error_saved_as_error() -> None:
     redis = FakeRedis()
     state = await check_webhook(_settings(), redis, force=True)  # type: ignore[arg-type]
     assert state == "error"
-    assert json.loads(redis.data[STATUS_KEY])["problems"] == ["MAX API: MaxApiError"]
+    assert json.loads(redis.data[STATUS_KEY])["problems"] == ["MAX API ответил 401 verify.token"]
 
 
 @respx.mock
@@ -173,3 +174,110 @@ async def test_doctor_network_error_is_not_blamed_on_token() -> None:
     problems = await doctor.diagnose(_settings(bot_mode="polling"), client, None)
     assert any("нет связи" in p and "VPN" in p for p in problems)
     assert not any("проверь MAX_BOT_TOKEN" in p for p in problems)
+
+
+async def test_doctor_checks_worker() -> None:
+    settings = _settings(max_bot_token=None)
+    problems = await doctor.diagnose(settings, None, FakeRedis())  # type: ignore[arg-type]
+    assert any("Воркер не отмечается" in p for p in problems)
+
+    redis = FakeRedis()
+    redis.data[doctor.WORKER_HEALTH_KEY] = "Sep-29 14:43:37 j_complete=3 queued=0"
+    problems = await doctor.diagnose(settings, None, redis)  # type: ignore[arg-type]
+    assert not any("Воркер" in p for p in problems)
+
+    redis.zsets["arq:queue"] = {str(i) for i in range(doctor.QUEUE_BACKLOG)}
+    problems = await doctor.diagnose(settings, None, redis)  # type: ignore[arg-type]
+    assert any("воркер не успевает" in p for p in problems)
+
+
+@respx.mock
+async def test_doctor_checks_webhook_from_outside() -> None:
+    settings = _settings(max_bot_token=None)
+    route = respx.post(URL).respond(401)
+    problems = await doctor.diagnose(settings, None, None, check_external=True)
+    assert route.called
+    # Без секрета: заголовок X-Max-Bot-Api-Secret не отправляется.
+    assert "x-max-bot-api-secret" not in route.calls.last.request.headers
+    assert not any("снаружи" in p or "Caddy" in p for p in problems)
+
+    respx.post(URL).respond(404)
+    problems = await doctor.diagnose(settings, None, None, check_external=True)
+    assert any("Caddy" in p for p in problems)
+
+    respx.post(URL).mock(side_effect=httpx.ConnectError("boom"))
+    problems = await doctor.diagnose(settings, None, None, check_external=True)
+    assert any("недоступен снаружи" in p for p in problems)
+
+
+@respx.mock
+async def test_doctor_names_tls_problem() -> None:
+    from app.integrations.max import MaxClient
+
+    respx.get(f"{BASE}/me").mock(
+        side_effect=httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] unable to get issuer")
+    )
+    client = MaxClient(BOT_TOKEN, BASE, backoff_s=0)
+    problems = await doctor.diagnose(_settings(bot_mode="polling"), client, None)
+    assert any("Russian Trusted CA" in p for p in problems)
+
+
+def test_ssl_context_trusts_russian_ca() -> None:
+    from app.integrations.max.client import RUSSIAN_TRUSTED_CA, ssl_context
+
+    subjects = [str(c.get("subject")) for c in ssl_context().get_ca_certs()]
+    assert any("Russian Trusted Root CA" in s for s in subjects)
+    assert RUSSIAN_TRUSTED_CA.read_text().count("BEGIN CERTIFICATE") == 2
+
+
+def test_describe_error_has_no_secrets() -> None:
+    from app.integrations.max.client import MaxApiError, describe_error
+
+    assert describe_error(MaxApiError(401, "verify.token", BOT_TOKEN)) == (
+        "MAX API ответил 401 verify.token"
+    )
+    assert "ConnectError" in describe_error(httpx.ConnectError(BOT_TOKEN))
+    assert BOT_TOKEN not in describe_error(httpx.ConnectError(BOT_TOKEN))
+
+
+def test_arq_job_args_hidden_in_logs() -> None:
+    import logging
+
+    from app.core.logging import HideJobArgs
+
+    started = logging.LogRecord(
+        "arq.worker",
+        logging.INFO,
+        "",
+        0,
+        "%6.2fs → %s(%s)%s",
+        (0.1, "abc:send_user_message", "123, 'Привет, Иван'", ""),
+        None,
+    )
+    done = logging.LogRecord(
+        "arq.worker",
+        logging.INFO,
+        "",
+        0,
+        "%6.2fs ← %s ● %s",
+        (0.1, "abc:x", "'+79990000000'"),
+        None,
+    )
+    for record in (started, done):
+        assert HideJobArgs().filter(record)
+    assert "Иван" not in started.getMessage() and "send_user_message" in started.getMessage()
+    assert "7999" not in done.getMessage()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("42", [42]),
+        (" 42 , 43 ", [42, 43]),
+        ("42,,43,", [42, 43]),
+        (",42 ;43 ,", [42, 43]),
+        ("", []),
+    ],
+)
+def test_admin_ids_tolerate_spaces_and_commas(raw: str, expected: list[int]) -> None:
+    assert _settings(admin_max_user_ids=raw).admin_max_user_ids == expected

@@ -19,7 +19,7 @@ from redis.asyncio import Redis
 from app.bot import texts
 from app.core.config import Settings
 from app.integrations.max import MaxClient
-from app.integrations.max.client import UPDATE_TYPES
+from app.integrations.max.client import UPDATE_TYPES, describe_error
 
 log = structlog.get_logger(__name__)
 
@@ -114,8 +114,8 @@ async def check_webhook(settings: Settings, redis: Redis, *, force: bool) -> str
             force=force,
         )
     except Exception as exc:
-        log.exception("bot_webhook_check_failed")
-        await save_status(redis, "error", [f"MAX API: {type(exc).__name__}"])
+        log.exception("bot_webhook_check_failed", reason=describe_error(exc))
+        await save_status(redis, "error", [describe_error(exc)])
         return "error"
     finally:
         await client.aclose()

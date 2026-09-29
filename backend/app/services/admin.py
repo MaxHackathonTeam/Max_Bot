@@ -5,6 +5,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.events import Event
+from app.models.orgs import VerificationRequest
 from app.models.system import AuditLog, ModerationDecision
 from app.models.users import User
 from app.moderation import rules
@@ -24,6 +26,16 @@ from app.services import verification as verification_service
 
 QUEUE_LIMIT = 20
 AUDIT_LIMIT = 50
+
+
+async def request_status(session: AsyncSession, kind: str, entity_id: int) -> str | None:
+    """Статус заявки из уведомления модератору: e — событие, v — проверка организации."""
+    item: Event | VerificationRequest | None = (
+        await session.get(Event, entity_id)
+        if kind == "e"
+        else await session.get(VerificationRequest, entity_id)
+    )
+    return str(item.status) if item is not None else None
 
 
 async def queue(
