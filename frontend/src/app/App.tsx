@@ -13,6 +13,7 @@ import { NewEventPage } from "../pages/NewEventPage";
 import { InvitePage } from "../pages/InvitePage";
 import { LegalPage } from "../pages/LegalPage";
 import { OrgPage } from "../pages/OrgPage";
+import { OrgsPage } from "../pages/OrgsPage";
 import { SavedPage } from "../pages/SavedPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { ToastProvider } from "../ui/Toast";
@@ -65,6 +66,7 @@ export function App() {
                 <Route path="/event/:id" element={<EventPage />} />
                 <Route path="/saved" element={<SavedPage />} />
                 <Route path="/org/:id" element={<OrgPage />} />
+                <Route path="/orgs" element={<OrgsPage />} />
                 <Route path="/draft/:id" element={<DraftPage />} />
                 <Route path="/new" element={<NewEventPage />} />
                 <Route path="/my" element={<MyEventsPage />} />

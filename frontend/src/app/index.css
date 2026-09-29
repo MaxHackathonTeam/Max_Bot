@@ -350,7 +350,7 @@ select {
   bottom: 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   background: var(--card);
   border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
@@ -367,6 +367,11 @@ select {
   font-weight: 600;
   text-decoration: none;
   color: var(--ink-soft);
+  min-width: 0;
+  padding: 0 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tabbar a[aria-current="page"] {
@@ -1776,4 +1781,43 @@ mark.parsed {
 .page--flush {
   flex: none;
   padding-bottom: 0;
+}
+
+/* --- Открытый профиль организации -------------------------------------------------- */
+
+.org-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.org-head .h1 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.org-about {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.org-contact {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+
+.org-contact > svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--ink-soft);
+}
+
+.org-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
 }

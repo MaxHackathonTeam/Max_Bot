@@ -3,7 +3,7 @@
 Payload callback-кнопок — «префикс:аргументы», до 1024 символов (schema.yaml: CallbackButton).
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.bot import texts
@@ -143,6 +143,27 @@ def _details(web_app: str | None, n: int, event_id: int, url: str | None) -> kb.
 FeedItem = tuple[int, int | None, str | None]  # event_id, session_id, ссылка на сайт
 
 
+def _feed_rows(
+    web_app: str | None,
+    items: Sequence[FeedItem],
+    offset: int,
+    orgs: Mapping[int, int] | None = None,
+) -> list[list[kb.Button]]:
+    rows: list[list[kb.Button]] = []
+    for n, (event_id, session_id, url) in enumerate(items, start=offset + 1):
+        row: list[kb.Button] = []
+        details = _details(web_app, n, event_id, url)
+        if details is not None:
+            row.append(details)
+        if session_id is not None:
+            row.append(kb.callback(texts.FEED_SAVE_BUTTON, f"{P_SAVE}:{event_id}:{session_id}"))
+        if orgs and event_id in orgs:
+            row.append(kb.callback(texts.ORG_ABOUT_BUTTON, org_profile_payload(orgs[event_id])))
+        if row:
+            rows.append(row)
+    return rows
+
+
 def feed(
     web_app: str | None,
     items: Sequence[FeedItem],
@@ -152,18 +173,13 @@ def feed(
     tier: str = "o",
     next_cursor: str | None = None,
     offset: int = 0,
+    orgs: Mapping[int, int] | None = None,
 ) -> dict[str, Any]:
-    """Строка на событие: [№ Подробнее на сайте] [⭐ Пойду]; внизу «Ещё» и «Меню»."""
-    rows: list[list[kb.Button]] = []
-    for n, (event_id, session_id, url) in enumerate(items, start=offset + 1):
-        row: list[kb.Button] = []
-        details = _details(web_app, n, event_id, url)
-        if details is not None:
-            row.append(details)
-        if session_id is not None:
-            row.append(kb.callback(texts.FEED_SAVE_BUTTON, f"{P_SAVE}:{event_id}:{session_id}"))
-        if row:
-            rows.append(row)
+    """Строка на событие: [№ Подробнее на сайте] [⭐ Пойду] [🏛 Организатор]; внизу «Ещё» и «Меню».
+
+    orgs — event_id → organization_id для кнопки «Об организаторе».
+    """
+    rows = _feed_rows(web_app, items, offset, orgs)
     bottom: list[kb.Button] = []
     if next_cursor and preset:
         more = feed_payload(preset, radius, tier, offset + len(items), next_cursor)
@@ -254,6 +270,7 @@ def org_menu(web_app: str | None) -> dict[str, Any]:
     if web_app:
         rows.append([kb.open_app(texts.ORG_OPEN_BUTTON, web_app, "org_0")])
         rows.append([kb.open_app(texts.ORG_NEW_EVENT_BUTTON, web_app, "draft_0")])
+    rows.append([kb.callback(texts.ORG_SEARCH_BUTTON, CB_ORG_FIND)])
     rows.append([kb.callback(texts.MENU_BUTTON, CB_MENU)])
     return kb.inline_keyboard(rows)
 
@@ -424,3 +441,82 @@ def moderation_alert(kind: str, entity_id: int, url: str | None) -> dict[str, An
 def moderation_closed(url: str | None) -> dict[str, Any] | None:
     """После решения кнопки убираем, ссылку на карточку оставляем."""
     return kb.inline_keyboard([[kb.link(texts.MOD_OPEN_SITE, url)]]) if url else None
+
+
+# --- Профиль организации ------------------------------------------------------------------
+# orgp:<id> — профиль | orgp:ev:<id>:<o|c>:<offset>[:<cursor>] — афиши | orgp:find — поиск
+
+P_ORG_PUBLIC = "orgp"
+CB_ORG_FIND = f"{P_ORG_PUBLIC}:find"
+ORG_BUTTON_MAX = 64
+
+
+def org_profile_payload(org_id: int) -> str:
+    return f"{P_ORG_PUBLIC}:{org_id}"
+
+
+def org_events_payload(
+    org_id: int, tier: str = "o", offset: int = 0, cursor: str | None = None
+) -> str:
+    return f"{P_ORG_PUBLIC}:ev:{org_id}:{tier}:{offset}" + (f":{cursor}" if cursor else "")
+
+
+def _org_site(label: str, org_id: int, url: str | None, web_app: str | None) -> kb.Button | None:
+    if url:
+        return kb.link(label, url)
+    if web_app:
+        return kb.open_app(label, web_app, f"org_{org_id}")
+    return None
+
+
+def org_profile(
+    org_id: int, *, url: str | None, web_app: str | None, official: int, community: int
+) -> dict[str, Any]:
+    """[Афиши организации] (лента с событиями), [От сообщества], [Открыть на сайте], [Меню]."""
+    rows: list[list[kb.Button]] = []
+    if official or not community:
+        label = texts.ORG_EVENTS_BUTTON.format(count=official)
+        rows.append([kb.callback(label, org_events_payload(org_id, "o"))])
+    if community:
+        label = texts.ORG_COMMUNITY_BUTTON.format(count=community)
+        rows.append([kb.callback(label, org_events_payload(org_id, "c"))])
+    site = _org_site(texts.ORG_SITE_BUTTON, org_id, url, web_app)
+    if site is not None:
+        rows.append([site])
+    rows.append([kb.callback(texts.MENU_BUTTON, CB_MENU)])
+    return kb.inline_keyboard(rows)
+
+
+def org_events(
+    web_app: str | None,
+    items: Sequence[FeedItem],
+    *,
+    org_id: int,
+    tier: str,
+    next_cursor: str | None,
+    offset: int,
+    other: tuple[str, int] | None = None,
+) -> dict[str, Any]:
+    """Афиши одной ленты; other — (код другой ленты, сколько там событий)."""
+    rows = _feed_rows(web_app, items, offset)
+    if next_cursor:
+        more = org_events_payload(org_id, tier, offset + len(items), next_cursor)
+        if len(more) <= 1024:
+            rows.append([kb.callback(texts.FEED_MORE_BUTTON, more)])
+    if other is not None and other[1]:
+        template = texts.ORG_COMMUNITY_BUTTON if other[0] == "c" else texts.ORG_OFFICIAL_BUTTON
+        label = template.format(count=other[1])
+        rows.append([kb.callback(label, org_events_payload(org_id, other[0]))])
+    rows.append([kb.callback(texts.ORG_BACK_BUTTON, org_profile_payload(org_id))])
+    rows.append([kb.callback(texts.MENU_BUTTON, CB_MENU)])
+    return kb.inline_keyboard(rows)
+
+
+def org_search_results(options: Sequence[tuple[int, str]]) -> dict[str, Any]:
+    rows = [
+        [kb.callback(label[:ORG_BUTTON_MAX], org_profile_payload(org_id))]
+        for org_id, label in options
+    ]
+    rows.append([kb.callback(texts.ORG_SEARCH_AGAIN_BUTTON, CB_ORG_FIND)])
+    rows.append([kb.callback(texts.MENU_BUTTON, CB_MENU)])
+    return kb.inline_keyboard(rows)

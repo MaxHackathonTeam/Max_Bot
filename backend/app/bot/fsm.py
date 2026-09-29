@@ -20,6 +20,8 @@ CITY_LOCALITY = "city.locality"
 ADMIN_REASON = "admin.reason"
 # /find: следующее сообщение — поисковый запрос.
 FIND_QUERY = "find.query"
+# /orgs: следующее сообщение — название организации.
+ORG_SEARCH = "orgs.search"
 # Мастер «Добавить афишу»: add.<шаг>, шаги — app.bot.add_event.STEPS.
 ADD_PREFIX = "add."
 IDLE = "idle"
