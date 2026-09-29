@@ -65,6 +65,11 @@ def test_algorithm_matches_spec() -> None:
     assert hmac.new(secret, check, hashlib.sha256).hexdigest() == REFERENCE_HASH
 
 
+def test_sorts_pairs_like_go_client() -> None:
+    # sort.Strings по «k=v»: «a-b=…» раньше «a=…» ('-' < '='), хотя ключ «a» короче.
+    assert data_check_string({"a": "1", "a-b": "2"}) == "a-b=2\na=1"
+
+
 def test_fully_url_encoded_string() -> None:
     data = validate_init_data(quote(_reference_raw(), safe=""), BOT_TOKEN, DAY, now=NOW)
     assert data.max_user_id == 123456

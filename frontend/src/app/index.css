@@ -1,4 +1,5 @@
-/* «Афиша рядом»: тёплая бумажная афиша. Только светлая тема, цвета — токены ниже. */
+/* «Афиша рядом»: тёплая бумажная афиша. Все цвета — токены ниже; тёмная тема —
+   :root[data-theme="dark"] (атрибут ставит скрипт в index.html и app/theme.ts). */
 
 :root {
   color-scheme: light;
@@ -22,6 +23,34 @@
   --danger: #a8321f;
   --danger-tint: #fbe7e1;
 
+  /* Заливки под белым текстом и прочие роли. */
+  --on-fill: #fff;
+  --accent-fill: #b3331d;
+  --accent-fill-hover: #9e2c18;
+  --danger-fill: #a8321f;
+  --green-fill: #2b7148;
+  --ink-hover: #3a332b;
+  --on-sun: #211c17;
+  --pushkin-ink: #6b4a00;
+  --sun-line: #efd894;
+  --skeleton-hi: #f8f1e3;
+  --knob: #fff;
+  --scrim: rgba(33, 28, 23, 0.45);
+
+  /* Цвета категорий (текст и иконка на бумаге/карточке). */
+  --cat-concert: #9c3d2e;
+  --cat-theatre: #7a3b5e;
+  --cat-cinema: #3e4a6b;
+  --cat-exhibition: #6b5a2e;
+  --cat-masterclass: #7a5a1f;
+  --cat-lecture: #3d5e63;
+  --cat-festival: #a8402a;
+  --cat-sport: #2f6b45;
+  --cat-excursion: #4a6131;
+  --cat-games: #5b4a7a;
+  --cat-kids: #9a4e2b;
+  --cat-other: #5b5247;
+
   --font-text: "Onest Variable", "Onest", system-ui, -apple-system, "Segoe UI",
     Roboto, sans-serif;
   --font-display: "Unbounded Variable", "Unbounded", var(--font-text);
@@ -41,6 +70,54 @@
   background: var(--paper);
   -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
+}
+
+/* Тёмная: тёплый «вечерний» вариант той же афиши. Контраст текста ≥ 4.5:1. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --paper: #1b1712;
+  --paper-deep: #262019;
+  --card: #231d17;
+  --ink: #f3eadb;
+  --ink-soft: #cfc2ad;
+  --ink-faint: #ab9d88;
+  --line: #3a3128;
+  --line-strong: #54483b;
+
+  --tomato: #f08466;
+  --tomato-deep: #f08466;
+  --tomato-tint: #44251b;
+  --sun: #f5b72f;
+  --sun-tint: #3b2f15;
+  --green: #7cc99c;
+  --green-tint: #1f3527;
+  --danger: #f38b74;
+  --danger-tint: #44221b;
+
+  --accent-fill: #c2482c;
+  --accent-fill-hover: #a93b22;
+  --danger-fill: #b23a24;
+  --green-fill: #2f7a4f;
+  --ink-hover: #fffaf0;
+  --pushkin-ink: #f5cf6e;
+  --sun-line: #5c4a1d;
+  --skeleton-hi: #302820;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.5);
+
+  --cat-concert: #f0927c;
+  --cat-theatre: #e39ac2;
+  --cat-cinema: #9fb2e6;
+  --cat-exhibition: #d9c38a;
+  --cat-masterclass: #e6b567;
+  --cat-lecture: #8fcbd3;
+  --cat-festival: #f59a7a;
+  --cat-sport: #86cf9f;
+  --cat-excursion: #b3cf86;
+  --cat-games: #bfaee8;
+  --cat-kids: #f0a57c;
+  --cat-other: #cfc2ad;
 }
 
 *,
@@ -394,16 +471,16 @@ select {
 }
 
 .btn--primary {
-  --btn-bg: var(--tomato-deep);
-  --btn-fg: #fff;
+  --btn-bg: var(--accent-fill);
+  --btn-fg: var(--on-fill);
 }
 
 .btn--primary:hover:not(:disabled) {
-  --btn-bg: #9e2c18;
+  --btn-bg: var(--accent-fill-hover);
 }
 
 .btn--dark:hover:not(:disabled) {
-  --btn-bg: #3a332b;
+  --btn-bg: var(--ink-hover);
 }
 
 .btn--secondary {
@@ -427,8 +504,8 @@ select {
 }
 
 .btn--danger {
-  --btn-bg: var(--danger);
-  --btn-fg: #fff;
+  --btn-bg: var(--danger-fill);
+  --btn-fg: var(--on-fill);
 }
 
 .btn--on {
@@ -569,7 +646,7 @@ select {
   padding: 0 6px;
   border-radius: 999px;
   background: var(--sun);
-  color: var(--ink);
+  color: var(--on-sun);
   font-size: 12px;
   font-weight: 700;
   display: inline-flex;
@@ -631,7 +708,7 @@ select {
 
 .badge--pushkin {
   background: var(--sun-tint);
-  color: #6b4a00;
+  color: var(--pushkin-ink);
 }
 
 .badge--demo {
@@ -742,12 +819,12 @@ textarea.input {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--knob);
   transition: transform 0.15s;
 }
 
 .switch[aria-checked="true"] {
-  background: var(--green);
+  background: var(--green-fill);
 }
 
 .switch[aria-checked="true"]::after {
@@ -770,7 +847,7 @@ textarea.input {
 
 .card--sun {
   background: var(--sun-tint);
-  border-color: #efd894;
+  border-color: var(--sun-line);
 }
 
 .list {
@@ -871,7 +948,7 @@ button.list-row:hover {
   background: linear-gradient(
     90deg,
     var(--paper-deep) 0%,
-    #f8f1e3 50%,
+    var(--skeleton-hi) 50%,
     var(--paper-deep) 100%
   );
   background-size: 200% 100%;
@@ -932,7 +1009,7 @@ button.list-row:hover {
   position: absolute;
   inset: 0;
   border: 0;
-  background: rgba(33, 28, 23, 0.45);
+  background: var(--scrim);
   animation: fade 0.15s ease-out;
 }
 
@@ -1042,8 +1119,8 @@ button.list-row:hover {
 }
 
 .toast--error {
-  background: var(--danger);
-  color: #fff;
+  background: var(--danger-fill);
+  color: var(--on-fill);
 }
 
 .toast > svg {
@@ -1060,6 +1137,7 @@ button.list-row:hover {
 
 .feed__aside {
   display: none;
+  min-width: 0;
 }
 
 .feed__main {
@@ -1123,6 +1201,20 @@ button.list-row:hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* Две даты: рядом, пока хватает места (≥ 2 × 140 px), иначе друг под другом. */
+.date-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.date-range > .input {
+  flex: 1 1 140px;
+  width: 100%;
+  min-width: 0;
 }
 
 /* --- Карточка события в ленте --------------------------------------------------------- */
@@ -1429,8 +1521,8 @@ button.list-row:hover {
 }
 
 .step[aria-current="step"] .step__num {
-  background: var(--tomato-deep);
-  color: #fff;
+  background: var(--accent-fill);
+  color: var(--on-fill);
 }
 
 .session-edit {

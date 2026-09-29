@@ -4,8 +4,8 @@ BACKEND = cd backend &&
 
 .PHONY: up down logs test lint fmt migrate seed openapi deploy build-time backup
 
-up:  ## Собрать и поднять всё локально
-	$(COMPOSE) up --build
+up:  ## Собрать и поднять всё локально (с bot-poller: профиль local, BOT_MODE=polling)
+	$(COMPOSE) --profile local up --build
 
 down:
 	$(COMPOSE) down

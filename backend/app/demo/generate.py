@@ -7,15 +7,32 @@
 """
 
 import random
+from itertools import chain
 from typing import Any
 
-from app.demo.templates import COMMUNITY, OFFICIAL, PRICES, Template
+from app.demo.templates import (
+    CITY_COMMUNITY,
+    CITY_OFFICIAL,
+    COMMUNITY,
+    OFFICIAL,
+    PRICES,
+    Template,
+)
 
 SEED = 42
 TARGET_EVENTS = 400
 HORIZON_DAYS = 27  # сеансы — от сегодня до +4 недель
 OFFICIAL_PER_ORG = (5, 8)
 UNVERIFIED_PER_ORG = 2
+
+# Крупные города — отдельный слой со своим seed, чтобы не сдвигать основной набор.
+# Первые сеансы обеих лент покрывают сегодня…+6 (значит, и ближайшие выходные при любом
+# дне загрузки) и вторую неделю.
+CITY_SEED = 2026
+CITY_HORIZON_DAYS = 13
+CITY_OFFICIAL_DAYS = (0, 1, 2, 3, 4, 5, 6, 9, 12)
+CITY_COMMUNITY_DAYS = (0, 1, 2, 3, 4, 5, 6, 8, 11)
+PUSHKIN_CATEGORIES = {"theatre", "concert", "exhibition", "excursion", "lecture", "masterclass"}
 
 
 def pick_day(rng: random.Random) -> int:
@@ -46,11 +63,17 @@ def price_fields(rng: random.Random, tpl: Template) -> dict[str, Any]:
     return {"price_type": price_type, "price_min": price_min, "price_max": price_max}
 
 
-def build_event(
-    rng: random.Random, key: str, tpl: Template, locality: str, venue: str | None, *, official: bool
+def _event_dict(
+    key: str,
+    tpl: Template,
+    locality: str,
+    venue: str | None,
+    *,
+    official: bool,
+    prices: dict[str, Any],
+    pushkin: bool,
+    sessions: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    prices = price_fields(rng, tpl)
-    pushkin = official and prices["price_type"] == "paid" and rng.random() < 0.5
     return {
         "key": key,
         "title": tpl.title,
@@ -66,8 +89,25 @@ def build_event(
         "age_rating": tpl.age,
         "indoor": tpl.indoor,
         "registration_required": tpl.registration,
-        "sessions": sessions_for(rng, tpl),
+        "sessions": sessions,
     }
+
+
+def build_event(
+    rng: random.Random, key: str, tpl: Template, locality: str, venue: str | None, *, official: bool
+) -> dict[str, Any]:
+    prices = price_fields(rng, tpl)
+    pushkin = official and prices["price_type"] == "paid" and rng.random() < 0.5
+    return _event_dict(
+        key,
+        tpl,
+        locality,
+        venue,
+        official=official,
+        prices=prices,
+        pushkin=pushkin,
+        sessions=sessions_for(rng, tpl),
+    )
 
 
 def build_events(
@@ -123,4 +163,51 @@ def build_events(
             add(tpl, rng.choice(places), None, official=False)
             continue
         add(tpl, venue["locality"], venue["key"], official=False)
+    return events
+
+
+def city_sessions(rng: random.Random, tpl: Template, first: int) -> list[dict[str, Any]]:
+    """Повторы — через неделю. Сегодня — самый поздний сеанс, чтобы он не успел пройти."""
+    days = sorted({min(first + 7 * n, CITY_HORIZON_DAYS) for n in range(tpl.sessions)})
+    return [
+        {
+            "day": day,
+            "time": tpl.times[-1] if day == 0 else rng.choice(tpl.times),
+            "duration_min": tpl.minutes,
+        }
+        for day in days
+    ]
+
+
+def build_city_events() -> list[dict[str, Any]]:
+    """Демо-афиша Казани и Москвы: official — от проверенных учреждений, community — от жителей."""
+    rng = random.Random(CITY_SEED)  # noqa: S311 — нужна воспроизводимость, не криптостойкость
+    events: list[dict[str, Any]] = []
+    for city, official in CITY_OFFICIAL.items():
+        plan = chain(
+            ((tpl, day, True) for tpl, day in zip(official, CITY_OFFICIAL_DAYS, strict=True)),
+            (
+                (tpl, day, False)
+                for tpl, day in zip(CITY_COMMUNITY[city], CITY_COMMUNITY_DAYS, strict=True)
+            ),
+        )
+        for n, (tpl, day, is_official) in enumerate(plan, 1):
+            prices = price_fields(rng, tpl)
+            pushkin = (
+                is_official
+                and prices["price_type"] == "paid"
+                and tpl.category in PUSHKIN_CATEGORIES
+            )
+            events.append(
+                _event_dict(
+                    f"demo-{city}-{n:02d}",
+                    tpl,
+                    city,
+                    tpl.only_venues[0] if tpl.only_venues else None,
+                    official=is_official,
+                    prices=prices,
+                    pushkin=pushkin,
+                    sessions=city_sessions(rng, tpl, day),
+                )
+            )
     return events

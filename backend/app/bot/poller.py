@@ -5,6 +5,7 @@ BOT_POLLER_TAKEOVER=1 — иначе локальный запуск с боев
 """
 
 import asyncio
+import time
 
 import structlog
 from redis.asyncio import Redis
@@ -22,6 +23,9 @@ from app.services.notify import QueuedNotifier
 log = structlog.get_logger(__name__)
 
 MAX_BACKOFF_S = 30.0
+# Метка «poller жив»: обновляется после каждого опроса, её проверяет app.bot.doctor.
+HEARTBEAT_KEY = "bot:poller:heartbeat"
+HEARTBEAT_TTL_S = 120
 
 
 async def poll(ctx: BotContext, stop: asyncio.Event) -> None:
@@ -36,6 +40,10 @@ async def poll(ctx: BotContext, stop: asyncio.Event) -> None:
             backoff = min(backoff * 2, MAX_BACKOFF_S)
             continue
         backoff = 1.0
+        try:
+            await ctx.redis.set(HEARTBEAT_KEY, int(time.time()), ex=HEARTBEAT_TTL_S)
+        except Exception as exc:
+            log.warning("bot_poller_heartbeat_failed", error=type(exc).__name__)
         if next_marker is not None:
             marker = next_marker
         for update in updates:

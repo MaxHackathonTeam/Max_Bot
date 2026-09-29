@@ -49,7 +49,7 @@ export function FilterPanel({
   return (
     <div className="stack stack--loose">
       <Group title="Свои даты">
-        <div className="row">
+        <div className="date-range">
           <Input
             type="date"
             aria-label="С даты"

@@ -1,0 +1,19 @@
+{
+  "localities": [
+    {"key": "moscow", "name": "Москва", "kind": "city", "region": "Москва", "region_code": "77", "municipality": null, "lat": 55.7558, "lon": 37.6173, "population": 13000000}
+  ],
+  "venues": [
+    {"key": "kzn_opera", "locality": "kazan", "name": "Татарский академический государственный театр оперы и балета им. М. Джалиля", "address": "Казань, пл. Свободы, 2", "lat": 55.7929, "lon": 49.1224, "org_kind": "theatre", "verified": true},
+    {"key": "kzn_kachalov", "locality": "kazan", "name": "Казанский академический русский Большой драматический театр им. В. И. Качалова", "address": "Казань, ул. Баумана, 48", "lat": 55.7913, "lon": 49.1158, "org_kind": "theatre", "verified": true},
+    {"key": "kzn_art_museum", "locality": "kazan", "name": "Государственный музей изобразительных искусств Республики Татарстан", "address": "Казань, ул. Карла Маркса, 64", "lat": 55.7937, "lon": 49.1362, "org_kind": "museum", "verified": true},
+    {"key": "kzn_black_lake", "locality": "kazan", "name": "Парк «Чёрное озеро»", "address": "Казань, ул. Дзержинского", "lat": 55.7933, "lon": 49.1172, "org_kind": null},
+    {"key": "msk_bolshoi", "locality": "moscow", "name": "Большой театр", "address": "Москва, Театральная пл., 1", "lat": 55.7602, "lon": 37.6186, "org_kind": "theatre", "verified": true},
+    {"key": "msk_tretyakov", "locality": "moscow", "name": "Государственная Третьяковская галерея", "address": "Москва, Лаврушинский пер., 10", "lat": 55.7414, "lon": 37.6208, "org_kind": "museum", "verified": true},
+    {"key": "msk_pushkin_museum", "locality": "moscow", "name": "ГМИИ им. А. С. Пушкина", "address": "Москва, ул. Волхонка, 12", "lat": 55.7473, "lon": 37.605, "org_kind": "museum", "verified": true},
+    {"key": "msk_rgb", "locality": "moscow", "name": "Российская государственная библиотека", "address": "Москва, ул. Воздвиженка, 3/5", "lat": 55.7515, "lon": 37.6093, "org_kind": "library", "verified": true},
+    {"key": "msk_conservatory", "locality": "moscow", "name": "Московская государственная консерватория им. П. И. Чайковского", "address": "Москва, Большая Никитская ул., 13/6", "lat": 55.7565, "lon": 37.6044, "org_kind": "other", "verified": true},
+    {"key": "msk_zaryadye", "locality": "moscow", "name": "Парк «Зарядье»", "address": "Москва, ул. Варварка, 6", "lat": 55.7513, "lon": 37.6285, "org_kind": null},
+    {"key": "msk_gorky", "locality": "moscow", "name": "Парк Горького", "address": "Москва, ул. Крымский Вал, 9", "lat": 55.7299, "lon": 37.603, "org_kind": null},
+    {"key": "msk_hermitage", "locality": "moscow", "name": "Сад «Эрмитаж»", "address": "Москва, ул. Каретный Ряд, 3", "lat": 55.7707, "lon": 37.6097, "org_kind": null}
+  ]
+}

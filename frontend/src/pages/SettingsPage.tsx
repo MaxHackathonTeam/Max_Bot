@@ -20,6 +20,7 @@ import { FormErrors } from "../components/FormErrors";
 import { InterestChips } from "../components/InterestChips";
 import { LocalityPicker } from "../components/LocalityPicker";
 import { MaxLogin } from "../components/MaxLogin";
+import { ThemeChips } from "../components/ThemeSwitch";
 import { writePref } from "../lib/prefs";
 import { writeLocal } from "../lib/storage";
 import { Button } from "../ui/Button";
@@ -163,6 +164,11 @@ export function SettingsPage() {
             )}
           </section>
         )}
+
+        <section className="section stack">
+          <h2 className="h3">Оформление</h2>
+          <ThemeChips />
+        </section>
 
         <section className="section stack">
           <h2 className="h3">Ещё</h2>

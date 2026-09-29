@@ -120,3 +120,56 @@ async def test_ready_shows_bot_state(client: httpx.AsyncClient, monkeypatch) -> 
     assert bot["mode"] == "webhook"
     assert bot["state"] == "misconfigured"
     assert "MAX_WEBHOOK_SECRET не задан" in bot["problems"]
+
+
+# --- Локальный запуск: bot-poller должен подниматься `make up` и отмечаться в Redis ---
+
+
+def test_make_up_starts_bot_poller() -> None:
+    """Причина «бот молчит» локально: `make up` не включал профиль compose `local`."""
+    from pathlib import Path
+
+    makefile = (Path(__file__).resolve().parents[2] / "Makefile").read_text()
+    up_recipe = makefile.split("\nup:", 1)[1].split("\n\n", 1)[0]
+    assert "--profile local" in up_recipe
+
+
+async def test_poller_writes_heartbeat() -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.bot import poller
+
+    stop = asyncio.Event()
+
+    class OneShotMax:
+        async def get_updates(self, marker: int | None) -> tuple[list[object], int]:
+            stop.set()
+            return [], 7
+
+    redis = FakeRedis()
+    ctx = SimpleNamespace(max=OneShotMax(), redis=redis)
+    await poller.poll(ctx, stop)  # type: ignore[arg-type]
+    assert poller.HEARTBEAT_KEY in redis.data
+
+
+async def test_doctor_polling_without_heartbeat(capsys) -> None:  # type: ignore[no-untyped-def]
+    settings = _settings(bot_mode="polling", max_bot_token=None)
+    problems = await doctor.diagnose(settings, None, FakeRedis())  # type: ignore[arg-type]
+    assert any("bot-poller" in p and "make up" in p for p in problems)
+
+    redis = FakeRedis()
+    redis.data["bot:poller:heartbeat"] = "1700000000"
+    problems = await doctor.diagnose(settings, None, redis)  # type: ignore[arg-type]
+    assert not any("bot-poller" in p for p in problems)
+
+
+@respx.mock
+async def test_doctor_network_error_is_not_blamed_on_token() -> None:
+    from app.integrations.max import MaxClient
+
+    respx.get(f"{BASE}/me").mock(side_effect=httpx.ConnectError("boom"))
+    client = MaxClient(BOT_TOKEN, BASE, backoff_s=0)
+    problems = await doctor.diagnose(_settings(bot_mode="polling"), client, None)
+    assert any("нет связи" in p and "VPN" in p for p in problems)
+    assert not any("проверь MAX_BOT_TOKEN" in p for p in problems)
