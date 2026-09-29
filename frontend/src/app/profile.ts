@@ -159,7 +159,3 @@ export function useSetRadius() {
     },
   });
 }
-
-export function nextRadius(radius: number): Radius | null {
-  return RADII.find((r) => r > radius) ?? null;
-}

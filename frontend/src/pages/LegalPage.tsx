@@ -2,7 +2,7 @@ import { FileText } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { EmptyState } from "../ui/EmptyState";
 
-// ЧЕРНОВИКИ (§10 техдока): финальную редакцию проверяет человек, см. docs/HUMAN_TODO.md.
+// ЧЕРНОВИКИ (§10 техдока): финальную редакцию проверяет человек.
 // Версия совпадает с CONSENT_VERSIONS в backend/app/services/users.py — при правке
 // текста поднять версию там и здесь, чтобы согласие запросилось заново.
 const VERSION = "2026-09-23";

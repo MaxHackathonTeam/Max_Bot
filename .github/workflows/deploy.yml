@@ -124,7 +124,7 @@ jobs:
           if deploy "$previous"; then
             echo "Откат на $previous выполнен, /ready отвечает"
           else
-            echo "::error::Откат тоже не прошёл — нужен ручной разбор (docs/DEPLOY.md, раздел CI/CD)"
+            echo "::error::Откат тоже не прошёл — нужен ручной разбор"
           fi
           exit 1
           REMOTE
