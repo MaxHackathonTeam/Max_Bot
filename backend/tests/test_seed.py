@@ -14,7 +14,7 @@ from app.models.enums import EventStatus
 from app.models.events import Event, EventSource
 from app.models.geo import Locality
 from app.models.system import AuditLog
-from app.seed import SOURCE, SeedData, default_seed_dir, load, read_seed
+from app.seed import SOURCE, EventSeed, SeedData, default_seed_dir, load, read_seed
 from app.services.localities import geo_point
 from tests.helpers import login
 
@@ -195,7 +195,19 @@ async def test_seed_cities_have_both_feeds_within_5km(
     db_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
     data = read_seed(default_seed_dir())
-    await load(db_session, data, now=datetime.now(TZ))
+    now = datetime.now(TZ)
+    await load(db_session, data, now=now)
+
+    def upcoming(event: EventSeed) -> bool:
+        """Лента показывает событие, пока не закончился его последний сеанс. Сегодняшний
+        сеанс вечером уже прошёл — без этой проверки тест падал после ~18:00 по Москве."""
+        return any(
+            datetime.combine(now.date() + timedelta(days=s.day), s.time, tzinfo=TZ)
+            + timedelta(minutes=s.duration_min)
+            >= now
+            for s in event.sessions
+        )
+
     for key, name in CITIES.items():
         seed = next(loc for loc in data.localities if loc.key == key)
         locality = await db_session.scalar(
@@ -211,6 +223,7 @@ async def test_seed_cities_have_both_feeds_within_5km(
                 for e in data.events
                 if e.key.startswith(f"demo-{key}-")
                 and (e.organizer == "venue") == (tier == "official")
+                and upcoming(e)
             }
             for tier in ("official", "community")
         }
