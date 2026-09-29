@@ -1,4 +1,4 @@
-import { Bookmark, Building, CalendarDays, ChevronLeft, CirclePlus, UserRound } from "lucide-react";
+import { Bookmark, Building, CalendarDays, ChevronLeft, CirclePlus, Landmark, UserRound } from "lucide-react";
 import type { MouseEvent, ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { ProfileMenu } from "../components/ProfileMenu";
@@ -7,10 +7,11 @@ import { IconButton } from "../ui/Button";
 import { useRequireLogin } from "./login";
 import { useSession } from "./session";
 
-// top: false — на десктопе пункт заменяет меню профиля в шапке.
-const NAV = [
+// top: false — на десктопе пункт заменяет меню профиля в шапке; short — подпись в нижней панели.
+const NAV: { to: string; label: string; short?: string; icon: typeof Building; end: boolean; top: boolean }[] = [
   { to: "/", label: "Афиша", icon: CalendarDays, end: true, top: true },
   { to: "/saved", label: "Пойду", icon: Bookmark, end: false, top: true },
+  { to: "/orgs", label: "Организации", short: "Площадки", icon: Landmark, end: false, top: true },
   { to: "/new", label: "Добавить", icon: CirclePlus, end: false, top: true },
   { to: "/org/0", label: "Кабинет", icon: Building, end: false, top: true },
   { to: "/settings", label: "Профиль", icon: UserRound, end: false, top: false },
@@ -73,10 +74,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         {children}
       </div>
       <nav className="tabbar" aria-label="Разделы">
-        {NAV.map(({ to, label, icon: Icon, end }) => (
+        {NAV.map(({ to, label, short, icon: Icon, end }) => (
           <NavLink key={to} to={to} end={end} onClick={guard(to)}>
             <Icon size={22} aria-hidden />
-            {label}
+            {short ?? label}
           </NavLink>
         ))}
       </nav>

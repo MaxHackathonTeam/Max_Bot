@@ -1909,6 +1909,250 @@
         ]
       }
     },
+    "/api/v1/orgs/search": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Поиск организаций",
+        "operationId": "search_orgs_api_v1_orgs_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Часть названия",
+              "title": "Q"
+            },
+            "description": "Часть названия"
+          },
+          {
+            "name": "locality_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Locality Id"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OrgKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Вид организации",
+              "title": "Type"
+            },
+            "description": "Вид организации"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgSearchPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{org_id}/public": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Открытый профиль организации",
+        "operationId": "public_org_api_v1_orgs__org_id__public_get",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Org Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/orgs/{org_id}/public/events": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Афиши организации (открыто)",
+        "operationId": "public_org_events_api_v1_orgs__org_id__public_events_get",
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Org Id"
+            }
+          },
+          {
+            "name": "tier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "official",
+                "community"
+              ],
+              "type": "string",
+              "description": "Ленты не смешиваются",
+              "default": "official",
+              "title": "Tier"
+            },
+            "description": "Ленты не смешиваются"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/orgs/{org_id}": {
       "get": {
         "tags": [
@@ -6257,6 +6501,117 @@
         ],
         "title": "OrgOut"
       },
+      "OrgPublic": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OrgKind"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "«О нас» — кто это"
+          },
+          "locality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocalityBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "website": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website"
+          },
+          "vk_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vk Url"
+          },
+          "verified": {
+            "type": "boolean",
+            "title": "Verified"
+          },
+          "is_demo": {
+            "type": "boolean",
+            "title": "Is Demo"
+          },
+          "future_events": {
+            "type": "integer",
+            "title": "Future Events",
+            "description": "Опубликованные события с будущими сеансами"
+          },
+          "official_events": {
+            "type": "integer",
+            "title": "Official Events",
+            "description": "Из них в ленте «Официальные»"
+          },
+          "community_events": {
+            "type": "integer",
+            "title": "Community Events",
+            "description": "Из них в ленте «От жителей»"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "description",
+          "locality",
+          "address",
+          "website",
+          "vk_url",
+          "verified",
+          "is_demo",
+          "future_events",
+          "official_events",
+          "community_events"
+        ],
+        "title": "OrgPublic",
+        "description": "Публичный профиль: без ИНН/ОГРН (ИНН ИП — ПДн, §11), телефона, почты и команды."
+      },
       "OrgRole": {
         "type": "string",
         "enum": [
@@ -6264,6 +6619,82 @@
           "editor"
         ],
         "title": "OrgRole"
+      },
+      "OrgSearchItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OrgKind"
+          },
+          "locality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocalityBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verified": {
+            "type": "boolean",
+            "title": "Verified"
+          },
+          "is_demo": {
+            "type": "boolean",
+            "title": "Is Demo"
+          },
+          "future_events": {
+            "type": "integer",
+            "title": "Future Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "locality",
+          "verified",
+          "is_demo",
+          "future_events"
+        ],
+        "title": "OrgSearchItem"
+      },
+      "OrgSearchPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OrgSearchItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "OrgSearchPage"
       },
       "OrgUpdate": {
         "properties": {

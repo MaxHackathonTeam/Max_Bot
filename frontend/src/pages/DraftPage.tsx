@@ -491,7 +491,7 @@ function StepReview({ event, onFix }: { event: EventManage; onFix: (step: number
     mutationFn: () => deleteEvent(event.id),
     onSuccess: () => {
       toast.show("Черновик удалён");
-      navigate(event.organization_id ? `/org/${event.organization_id}` : "/my", { replace: true });
+      navigate(event.organization_id ? `/org/${event.organization_id}?tab=events` : "/my", { replace: true });
     },
   });
   const canSubmit = event.status === "draft" || event.status === "rejected";

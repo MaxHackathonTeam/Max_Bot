@@ -1,8 +1,8 @@
 """Организации, команда, приглашения и верификация (FR-ORG)."""
 
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Query, Response
 
 from app.api.deps import (
     AuthDep,
@@ -13,7 +13,8 @@ from app.api.deps import (
     is_admin,
 )
 from app.core.jobs import REQUEST_PHONE
-from app.models.enums import EventStatus, OrgRole, VerificationMethod
+from app.models.enums import EventStatus, OrgKind, OrgRole, VerificationMethod
+from app.schemas.events import EventPage
 from app.schemas.manage import MyEventItem
 from app.schemas.orgs import (
     InviteAccepted,
@@ -23,11 +24,13 @@ from app.schemas.orgs import (
     MemberOut,
     OrgCreate,
     OrgOut,
+    OrgPublic,
+    OrgSearchPage,
     OrgUpdate,
     VerificationOut,
     VerificationStart,
 )
-from app.services import analytics, event_editor
+from app.services import analytics, event_editor, org_public
 from app.services import orgs as orgs_service
 from app.services import verification as verification_service
 
@@ -47,6 +50,48 @@ async def my_orgs(auth: AuthDep, session: SessionDep) -> list[OrgOut]:
         await orgs_service.to_out(session, org, role)
         for org, role in await orgs_service.list_mine(session, auth.user)
     ]
+
+
+# --- Открытые: без токена, только публичные поля ---
+
+
+@router.get("/search", response_model=OrgSearchPage, summary="Поиск организаций")
+async def search_orgs(
+    session: SessionDep,
+    q: Annotated[
+        str | None, Query(max_length=org_public.MAX_QUERY, description="Часть названия")
+    ] = None,
+    locality_id: int | None = None,
+    type: Annotated[OrgKind | None, Query(description="Вид организации")] = None,
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    limit: Annotated[int, Query(ge=1, le=org_public.MAX_LIMIT)] = org_public.DEFAULT_LIMIT,
+) -> OrgSearchPage:
+    return await org_public.search(
+        session, q=q, locality_id=locality_id, kind=type, cursor=cursor, limit=limit
+    )
+
+
+@router.get("/{org_id}/public", response_model=OrgPublic, summary="Открытый профиль организации")
+async def public_org(org_id: int, session: SessionDep) -> OrgPublic:
+    return await org_public.get_public(session, org_id)
+
+
+@router.get(
+    "/{org_id}/public/events", response_model=EventPage, summary="Афиши организации (открыто)"
+)
+async def public_org_events(
+    org_id: int,
+    session: SessionDep,
+    tier: Annotated[
+        Literal["official", "community"], Query(description="Ленты не смешиваются")
+    ] = "official",
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    limit: Annotated[int, Query(ge=1, le=org_public.MAX_LIMIT)] = org_public.DEFAULT_LIMIT,
+) -> EventPage:
+    return await org_public.public_events(session, org_id, tier=tier, cursor=cursor, limit=limit)
+
+
+# --- Для участников ---
 
 
 @router.get("/{org_id}", response_model=OrgOut, summary="Организация")

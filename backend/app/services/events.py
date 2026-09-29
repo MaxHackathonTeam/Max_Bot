@@ -88,6 +88,8 @@ class EventFilters:
     age: int | None = None
     tier: Tier = "official"
     format: Format = "all"
+    # Афиши одной организации (публичный профиль): без привязки к месту поиска.
+    organization_id: int | None = None
     q: str | None = None
     sort: Sort | None = None
     cursor: str | None = None
@@ -260,6 +262,8 @@ async def search(
         within = func.ST_DWithin(place_point, origin_point, filters.radius_km * 1000)
         # Онлайн-события без площадки не привязаны к месту — показываем их везде.
         conds.append(or_(within, and_(Event.is_online, place_point.is_(None))))
+    if filters.organization_id is not None:
+        conds.append(Event.organization_id == filters.organization_id)
     if filters.format == "offline":
         conds.append(Event.is_online.is_(False))
     elif filters.format == "online":

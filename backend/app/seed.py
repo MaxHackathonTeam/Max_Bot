@@ -31,6 +31,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import make_sessionmaker
 from app.demo.generate import build_city_events, build_events
+from app.demo.orgs import SEED_USERNAME, org_description
 from app.models.enums import (
     AuditActor,
     EventStatus,
@@ -58,8 +59,6 @@ from app.services.localities import (
 )
 
 SOURCE = "demo"
-SEED_USERNAME = "afisha_demo_seed"
-ORG_NOTE = "Демо-данные: площадка реальная, события вымышлены для демонстрации."
 
 log = structlog.get_logger(__name__)
 
@@ -269,13 +268,14 @@ class _Loader:
                 )
             )
             status = VerificationStatus.verified if item.verified else VerificationStatus.unverified
+            description = org_description(item.org_kind, locality.name)
             if org is None:
                 org = Organization(
                     name=item.name,
                     kind=item.org_kind,
                     locality_id=locality.id,
                     address=item.address,
-                    description=ORG_NOTE,
+                    description=description,
                     created_by=self.user.id,
                 )
                 self.session.add(org)
@@ -289,6 +289,10 @@ class _Loader:
                 await self.audit(
                     "org.update", "organization", org.id, {"verification_status": [old, status]}
                 )
+                self.stats.add("updated", "organizations")
+            if org.description != description:
+                org.description = description
+                await self.audit("org.update", "organization", org.id, {"fields": ["description"]})
                 self.stats.add("updated", "organizations")
             self.orgs[item.key] = org
         venue = await self.session.scalar(
