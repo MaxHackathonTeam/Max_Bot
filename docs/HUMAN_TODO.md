@@ -1023,6 +1023,42 @@ git status --short
   новая вкладка с ботом в MAX; на телефоне удобнее отсканировать QR-код. Подтвердить вход в
   боте — сайт войдёт сам.
 
+### Прод: бот молчит, модерация в MAX (ветка `fix/bot-alive-moderation`, 29.09)
+
+Причина: сертификат MAX API (`platform-api2.max.ru`) выдан НУЦ Минцифры, серверу он был
+неизвестен — все вызовы MAX падали на проверке TLS. Сертификаты теперь в образе.
+
+- [ ] GitHub: PR ветки `fix/bot-alive-moderation` → `main`, смёржить после зелёного CI (деплой
+  запустится сам). Вручную на VPS:
+  ```bash
+  cd ~/afisha && git pull
+  docker compose -f compose.yaml -f compose.prod.yaml up -d --build --wait
+  docker compose -f compose.yaml -f compose.prod.yaml exec api python -m app.bot.doctor --fix
+  ```
+  Ожидаемо: doctor без проблем. Токен и секрет команды не печатают.
+- [ ] `VPS`: убедиться, что причина та же (цепочка должна вести к Russian Trusted CA):
+  ```bash
+  openssl s_client -connect platform-api2.max.ru:443 -showcerts </dev/null 2>/dev/null | grep -E "s:|i:"
+  docker compose -f compose.yaml -f compose.prod.yaml logs --since 30m api worker \
+    | grep -E 'bot_webhook_received|process_bot_update|max_api_transport_error'
+  ```
+- [ ] Локально: завести **отдельного тестового бота** в MAX и положить его токен в свой `.env`.
+  С боевым токеном локальный poller отбирает обновления у прода. `BOT_POLLER_TAKEOVER=1` — только
+  для тестового бота.
+- [ ] Модераторы: каждый пишет боту `/start`, затем `/whoami` — бот покажет ID. ID через запятую —
+  в `ADMIN_MAX_USER_IDS` в `~/afisha/.env`, затем
+  `docker compose -f compose.yaml -f compose.prod.yaml up -d api worker`. `/whoami` должен показать
+  роль модератора.
+- [ ] MAX, чек-лист:
+  1. `/start` → бот отвечает; текст и кнопки меню работают.
+  2. `/whoami` у модератора → «модератор».
+  3. Подать с другого аккаунта событие со ссылками/стоп-словами (или заявку на верификацию
+     организации) → у всех модераторов карточка с кнопками и ссылкой на сайт.
+  4. «✅ Одобрить» → автор получает уведомление, у второго модератора карточка меняется на
+     «решено», кнопки исчезают.
+  5. На другой заявке «❌ Отклонить» → бот спрашивает причину → автор получает её.
+  6. Повторное нажатие на старую кнопку → «Уже решено: …».
+
 ## Обновление приложения и повседневные команды
 
 На VPS под `deploy`:

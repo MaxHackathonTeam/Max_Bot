@@ -169,6 +169,9 @@ async def moderate_event(session: AsyncSession, event_id: int, *, notifier: Noti
         await notify_owner(
             session, notifier, event, texts.EVENT_PUBLISHED.format(title=event.title)
         )
+    elif event.status == EventStatus.pending:
+        # Правила не пропустили автоматически — заявка ждёт модератора.
+        await notifier.alert_moderators("e", event.id)
     return str(event.status)
 
 
@@ -251,10 +254,22 @@ async def admin_decide(
     action: str,
     reason: str | None,
     notifier: Notifier,
+    *,
+    only_pending: bool = False,
 ) -> Event:
+    """only_pending — кнопки из уведомления модератору: решают только ожидающую заявку,
+    повторное нажатие (или после решения на сайте) даёт 409 already_decided с текущим статусом.
+    """
     event = await session.get(Event, event_id, with_for_update=True)
     if event is None:
         raise AppError("event_not_found", "Событие не найдено", status_code=404)
+    if only_pending and event.status != EventStatus.pending:
+        raise AppError(
+            "already_decided",
+            "По заявке уже есть решение",
+            status_code=409,
+            details={"status": str(event.status)},
+        )
     allowed, target = _ADMIN_TRANSITIONS[action]
     if event.status not in allowed:
         raise AppError(
@@ -300,6 +315,8 @@ async def admin_decide(
         EventStatus.draft: texts.EVENT_RETURNED.format(title=event.title, reason=reason),
     }[target]
     await notify_owner(session, notifier, event, text)
+    if before == EventStatus.pending:
+        await notifier.moderation_closed("e", event.id)
     return event
 
 

@@ -4,12 +4,20 @@
 POST /messages?user_id|chat_id, POST /answers?callback_id, GET /updates,
 GET|POST|DELETE /subscriptions, GET /me, PATCH /me/commands.
 Авторизация — заголовок `Authorization: <token>`.
+
+TLS-сертификат platform-api2.max.ru выдан НУЦ Минцифры (Russian Trusted CA), которого нет
+в certifi и в стандартных образах: без него любой вызов падает с CERTIFICATE_VERIFY_FAILED.
+Поэтому к certifi добавляются корневой и промежуточный сертификаты из certs/.
 """
 
 import asyncio
+import ssl
 import time
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
+import certifi
 import httpx
 import structlog
 
@@ -21,6 +29,28 @@ RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 DEFAULT_TIMEOUT_S = 10.0
 # Типы обновлений, которые обрабатывает бот (§12).
 UPDATE_TYPES = ("bot_started", "message_created", "message_callback")
+RUSSIAN_TRUSTED_CA = Path(__file__).with_name("certs") / "russian_trusted_ca.pem"
+
+
+@lru_cache
+def ssl_context() -> ssl.SSLContext:
+    """certifi + Russian Trusted Root/Sub CA — для MAX API и CDN вложений."""
+    context = ssl.create_default_context(cafile=certifi.where())
+    context.load_verify_locations(cafile=str(RUSSIAN_TRUSTED_CA))
+    return context
+
+
+def describe_error(exc: BaseException) -> str:
+    """Короткое описание сбоя связи с MAX без токена и тел запросов (для /ready и doctor)."""
+    text = str(exc)
+    if "CERTIFICATE_VERIFY_FAILED" in text:
+        return (
+            "TLS: сертификат MAX API не проверен (нет доверия к Russian Trusted CA) — "
+            "обнови образ: корневой сертификат лежит в app/integrations/max/certs"
+        )
+    if isinstance(exc, MaxApiError):
+        return f"MAX API ответил {exc.status_code} {exc.code or ''}".strip()
+    return f"нет связи с MAX API ({type(exc).__name__})"
 
 
 class MaxApiError(Exception):
@@ -46,6 +76,7 @@ class MaxClient:
             headers={"Authorization": token},
             timeout=timeout_s,
             transport=transport,
+            verify=ssl_context(),
         )
         self._retries = retries
         self._backoff_s = backoff_s
@@ -79,6 +110,7 @@ class MaxClient:
                         method=method,
                         path=path,
                         error=type(exc).__name__,
+                        tls_untrusted="CERTIFICATE_VERIFY_FAILED" in str(exc),
                     )
                     raise
                 await self._sleep(attempt, None)
@@ -133,6 +165,13 @@ class MaxClient:
             "POST", "/messages", params={"user_id": user_id, "chat_id": chat_id}, json=body
         )
         return result
+
+    async def edit_message(
+        self, message_id: str, *, text: str, attachments: list[dict[str, Any]] | None = None
+    ) -> None:
+        """PUT /messages?message_id (editMessage). attachments=[] убирает клавиатуру."""
+        body: dict[str, Any] = {"text": text, "attachments": attachments or []}
+        await self.request("PUT", "/messages", params={"message_id": message_id}, json=body)
 
     async def answer_callback(
         self,
@@ -197,7 +236,9 @@ class MaxClient:
             raise ValueError("Ожидается https-ссылка на вложение")
         # Отдельный клиент: ссылка ведёт на CDN, токен бота туда не отправляем.
         async with (
-            httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_S, follow_redirects=False) as http,
+            httpx.AsyncClient(
+                timeout=DEFAULT_TIMEOUT_S, follow_redirects=False, verify=ssl_context()
+            ) as http,
             http.stream("GET", url) as response,
         ):
             response.raise_for_status()

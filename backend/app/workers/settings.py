@@ -11,9 +11,10 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 
 from app.bot import keyboards, texts
+from app.bot import notify as bot_notify
 from app.bot.dispatcher import BotContext, handle_update
 from app.bot.fsm import RedisStateStore
-from app.bot.notify import BotNotifier, notify_admins_new_event
+from app.bot.notify import BotNotifier
 from app.bot.subscriptions import check_webhook, sync_commands
 from app.core.config import get_settings
 from app.core.jobs import ArqJobQueue
@@ -66,14 +67,51 @@ async def ensure_bot_webhook(ctx: dict[str, Any]) -> str | None:
 
 
 async def moderate_event(ctx: dict[str, Any], event_id: int, _attempt: int = 0) -> str | None:
-    """`_attempt` — для задач, поставленных прежними версиями в очередь; не используется."""
+    """`_attempt` — для задач, поставленных прежними версиями в очередь; не используется.
+
+    Если правила не пропустили событие, сервис ставит alert_moderators в очередь.
+    """
     async with ctx["db"]() as session:
-        status = await moderation_service.moderate_event(session, event_id, notifier=_notifier(ctx))
+        return await moderation_service.moderate_event(session, event_id, notifier=_notifier(ctx))
+
+
+def _retry(
+    ctx: dict[str, Any], event: str, exc: BaseException | None = None, **fields: Any
+) -> None:
+    """Повтор задачи с растущей паузой, после SEND_TRIES — только лог (без ПДн)."""
+    attempt = int(ctx.get("job_try") or 1)
+    if attempt >= SEND_TRIES:
+        log.error(f"{event}_failed", attempts=attempt, **fields)
+        return
+    log.warning(f"{event}_retry", attempt=attempt, **fields)
+    raise Retry(defer=SEND_BACKOFF_S * attempt) from exc
+
+
+async def alert_moderators(ctx: dict[str, Any], kind: str, entity_id: int) -> int:
+    """Заявка на модерацию → сообщения модераторам; недоставленным — повтор."""
     bot: BotContext | None = ctx.get("bot")
-    if status == "pending" and bot is not None:
-        # Правила не пропустили автоматически — заявка ждёт модератора.
-        await notify_admins_new_event(ctx["db"], bot.max, _settings, event_id)
-    return status
+    if bot is None:
+        log.warning("moderators_alert_dropped", reason="MAX_BOT_TOKEN не задан")
+        return 0
+    failed = await bot_notify.alert_moderators(
+        bot.db, bot.max, bot.settings, bot.redis, kind, entity_id
+    )
+    if failed:
+        _retry(ctx, "moderators_alert", kind=kind, entity_id=entity_id, failed=len(failed))
+    return len(failed)
+
+
+async def close_moderation(ctx: dict[str, Any], kind: str, entity_id: int) -> int:
+    """Решение по заявке → вердикт в сообщениях модераторов, кнопки убраны."""
+    bot: BotContext | None = ctx.get("bot")
+    if bot is None:
+        return 0
+    failed = await bot_notify.close_moderation(
+        bot.db, bot.max, bot.settings, bot.redis, kind, entity_id
+    )
+    if failed:
+        _retry(ctx, "moderation_close", kind=kind, entity_id=entity_id, failed=failed)
+    return failed
 
 
 async def check_verification(ctx: dict[str, Any], request_id: int) -> str | None:
@@ -97,12 +135,7 @@ async def send_user_message(
     try:
         await notifier.send(user_id, text, deeplink)
     except Exception as exc:
-        attempt = int(ctx.get("job_try") or 1)
-        if attempt >= SEND_TRIES:
-            log.error("user_message_failed", user_id=user_id, error=type(exc).__name__)
-            return
-        log.warning("user_message_retry", user_id=user_id, attempt=attempt)
-        raise Retry(defer=SEND_BACKOFF_S * attempt) from exc
+        _retry(ctx, "user_message", exc, user_id=user_id, error=type(exc).__name__)
 
 
 async def request_phone(ctx: dict[str, Any], user_id: int, org_id: int) -> None:
@@ -227,6 +260,12 @@ class _NullNotifier:
     async def send(self, user_id: int, text: str, deeplink: str | None = None) -> None:
         log.info("user_message_skipped", user_id=user_id)
 
+    async def alert_moderators(self, kind: str, entity_id: int) -> None:
+        log.info("moderators_alert_skipped", kind=kind, entity_id=entity_id)
+
+    async def moderation_closed(self, kind: str, entity_id: int) -> None:
+        return None
+
 
 async def startup(ctx: dict[str, Any]) -> None:
     engine = make_engine(_settings.database_url)
@@ -239,7 +278,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     client = client_from_settings(_settings)
     if client is not None:
         # Воркер доставляет сам; бот ставит сообщения другим в очередь — с повторами.
-        ctx["notifier"] = BotNotifier(db, client, _settings.max_bot_username)
+        ctx["notifier"] = BotNotifier(db, client, _settings.max_bot_username, ctx["jobs"])
         ctx["bot"] = BotContext(
             settings=_settings,
             db=db,
@@ -268,6 +307,8 @@ class WorkerSettings:
         moderate_event,
         check_verification,
         send_user_message,
+        alert_moderators,
+        close_moderation,
         request_phone,
         schedule_reminders,
         deliver_notifications,

@@ -657,6 +657,83 @@ async def _on_admin_callback(
         await _send(ctx, target, texts.QUEUE_DECIDED.format(id=entity_id, verdict=verdict))
 
 
+# --- Модерация: уведомления админам (кнопки «Одобрить» / «Отклонить») ----------------------
+
+
+def _already_decided(status: object) -> str:
+    verdict = texts.MOD_VERDICTS.get(str(status), str(status))
+    return texts.MOD_ALREADY_DECIDED.format(verdict=verdict)
+
+
+async def _mod_apply(
+    ctx: BotContext, target: _Target, kind: str, entity_id: int, reason: str | None
+) -> str:
+    """Решение из уведомления: только по ожидающей заявке, иначе «уже решено: <вердикт>».
+
+    Автору пишет сервис (notify_owner / VERIFY_*), audit_log — там же.
+    """
+    approve = reason is None
+    notifier = _notifier(ctx)
+    async with ctx.db() as session:
+        admin = await _user(session, target)
+        if not users_service.is_admin(admin, ctx.settings):
+            return texts.ADMIN_ONLY
+        try:
+            if kind == "e":
+                await moderation_service.admin_decide(
+                    session,
+                    admin,
+                    entity_id,
+                    "approve" if approve else "reject",
+                    reason,
+                    notifier,
+                    only_pending=True,
+                )
+            else:
+                await verification_service.decide(
+                    session, admin, entity_id, approve, reason, notifier
+                )
+        except AppError as exc:
+            if exc.code == "already_decided":
+                return _already_decided(exc.details.get("status"))
+            return exc.message
+    return (texts.MOD_APPROVED if approve else texts.MOD_REJECTED).format(id=entity_id)
+
+
+async def _on_mod_callback(
+    ctx: BotContext, target: _Target, args: list[str], answer: Answer
+) -> None:
+    if not _is_admin(ctx, target):
+        await answer(texts.ADMIN_ONLY)
+        return
+    kind, raw_id, action = args
+    entity_id = int(raw_id)
+    if action == "approve":
+        await answer(await _mod_apply(ctx, target, kind, entity_id, None))
+        return
+    # Отклонить: сначала проверяем, что заявка ещё ждёт, и только потом спрашиваем причину.
+    async with ctx.db() as session:
+        status = await admin_service.request_status(session, kind, entity_id)
+    if status is None:
+        await answer(texts.MOD_NOT_FOUND)
+        return
+    if status != "pending":
+        await answer(_already_decided(status))
+        return
+    await answer()
+    await ctx.states.set(target.user_id, f"{fsm.ADMIN_REASON}:{kind}:{entity_id}:mod")
+    await _send(ctx, target, texts.MOD_ASK_REASON)
+
+
+def _parse_mod(args: list[str]) -> bool:
+    return (
+        len(args) == 3
+        and args[0] in ("e", "v")
+        and args[1].isdigit()
+        and args[2] in ("approve", "reject")
+    )
+
+
 def _parse_admin(args: list[str]) -> bool:
     if len(args) == 3 and args[0] == "e" and args[2] in ("approve", "reject", "hide"):
         return args[1].isdigit()
@@ -666,13 +743,18 @@ def _parse_admin(args: list[str]) -> bool:
 
 
 async def _on_admin_reason(ctx: BotContext, target: _Target, state: str, text: str) -> None:
-    _, kind, raw_id = state.split(":")
+    _, kind, raw_id, *mode = state.split(":")
     if len(text) < 5:
         await _send(ctx, target, texts.QUEUE_REASON_TOO_SHORT)
         return
     await ctx.states.set(target.user_id, fsm.IDLE)
     if not _is_admin(ctx, target):
         await _send(ctx, target, texts.ADMIN_ONLY)
+        return
+    if mode:
+        # Причина к кнопке «Отклонить» из уведомления модератору.
+        reply = await _mod_apply(ctx, target, kind, int(raw_id), text[:500])
+        await _send(ctx, target, reply, keyboards.menu_button())
         return
     toast = await _admin_apply(ctx, target, kind, int(raw_id), "reject", text[:500])
     if toast == texts.QUEUE_DONE_TOAST:
@@ -821,7 +903,7 @@ async def _on_command(ctx: BotContext, target: _Target, command: str, arg: str) 
         await _ask_locality(ctx, target, fsm.CITY_LOCALITY)
     elif command == "/my":
         await _send_my(ctx, target)
-    elif command == "/myid":
+    elif command in ("/myid", "/whoami"):
         await _send_myid(ctx, target)
     elif command in _FEED_COMMANDS:
         await _send_feed(ctx, target, _FEED_COMMANDS[command])
@@ -903,6 +985,8 @@ async def _on_callback(
     elif payload == keyboards.CB_ORG:
         await answer()
         await _send_org_menu(ctx, target)
+    elif prefix == keyboards.P_MOD and _parse_mod(args):
+        await _on_mod_callback(ctx, target, args, answer)
     elif prefix == keyboards.P_ADMIN and _parse_admin(args):
         await _on_admin_callback(ctx, target, args, answer)
     elif payload in keyboards.SOON_CALLBACKS:

@@ -35,5 +35,12 @@ async def bot_webhook(
     if not isinstance(update, dict) or "update_type" not in update:
         raise HTTPException(400, detail="Ожидался объект Update")
     sink: UpdateSink = request.app.state.update_sink
-    await sink.put(update)
+    update_type = str(update.get("update_type"))
+    try:
+        await sink.put(update)
+    except Exception as exc:
+        # Не 200: обновление не принято. В лог только тип обновления, без текста и пользователя.
+        log.error("bot_webhook_enqueue_failed", update_type=update_type, error=type(exc).__name__)
+        raise HTTPException(503, detail="Очередь обновлений недоступна") from exc
+    log.info("bot_webhook_received", update_type=update_type)
     return {"ok": True}

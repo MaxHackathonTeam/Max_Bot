@@ -118,4 +118,4 @@ async def get_user(session: AsyncSession, target: Target) -> User:
 def notifier_of(ctx: BotContext) -> Notifier:
     if ctx.notifier is not None:
         return ctx.notifier
-    return BotNotifier(ctx.db, ctx.max, ctx.settings.max_bot_username)
+    return BotNotifier(ctx.db, ctx.max, ctx.settings.max_bot_username, ctx.jobs)

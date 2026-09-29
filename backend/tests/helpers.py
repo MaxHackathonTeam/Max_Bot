@@ -72,10 +72,27 @@ async def login_as(
 
 
 class FakeRedis:
-    """Минимум redis.asyncio для кодов входа: get/set(ex, nx, xx, keepttl)/delete, без TTL."""
+    """Минимум redis.asyncio: get/set(ex, nx, xx, keepttl)/delete/zcard/hset/hgetall, без TTL."""
 
     def __init__(self) -> None:
         self.data: dict[str, str] = {}
+        self.zsets: dict[str, set[str]] = {}
+        self.hashes: dict[str, dict[str, str]] = {}
+
+    async def zcard(self, key: str) -> int:
+        return len(self.zsets.get(key, ()))
+
+    async def hset(self, key: str, field: str, value: str) -> int:
+        bucket = self.hashes.setdefault(key, {})
+        new = field not in bucket
+        bucket[field] = value
+        return int(new)
+
+    async def hgetall(self, key: str) -> dict[str, str]:
+        return dict(self.hashes.get(key, {}))
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        return key in self.hashes or key in self.data
 
     async def get(self, key: str) -> str | None:
         return self.data.get(key)
@@ -95,4 +112,7 @@ class FakeRedis:
         return True
 
     async def delete(self, *keys: str) -> int:
-        return sum(self.data.pop(k, None) is not None for k in keys)
+        return sum(
+            (self.data.pop(k, None) is not None) + (self.hashes.pop(k, None) is not None)
+            for k in keys
+        )
