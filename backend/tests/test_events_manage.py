@@ -370,6 +370,8 @@ async def test_admin_card_and_moderation_rights(
     assert [d["actor_type"] for d in card["decisions"]] == ["admin", "rules"]
     mine = (await db_client.get("/api/v1/me/events", headers=author)).json()
     assert [(e["id"], e["status"]) for e in mine] == [(event["id"], "rejected")]
+
+
 async def test_precheck_return_and_queue_filter(
     db_app: FastAPI, db_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
