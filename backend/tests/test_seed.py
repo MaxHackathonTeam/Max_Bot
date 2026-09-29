@@ -1,4 +1,5 @@
-"""Демо-набор: валидность файлов, идемпотентная загрузка, пометка demo, соседние сёла."""
+"""Демо-набор: валидность файлов, идемпотентная загрузка, пометка demo, соседние сёла,
+городской слой Казани и Москвы."""
 
 from datetime import datetime, timedelta
 from typing import Any
@@ -8,16 +9,18 @@ import httpx
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.demo.generate import TARGET_EVENTS
+from app.demo.generate import TARGET_EVENTS, build_city_events
 from app.models.enums import EventStatus
 from app.models.events import Event, EventSource
 from app.models.geo import Locality
 from app.models.system import AuditLog
 from app.seed import SOURCE, SeedData, default_seed_dir, load, read_seed
+from app.services.localities import geo_point
 from tests.helpers import login
 
 TZ = ZoneInfo("Europe/Moscow")
-REGIONS = {"53", "16", "76"}
+REGIONS = {"53", "16", "76", "77"}
+CITIES = {"kazan": "Казань", "moscow": "Москва"}
 
 
 def test_seed_files_are_valid() -> None:
@@ -26,7 +29,7 @@ def test_seed_files_are_valid() -> None:
     assert {loc.region_code for loc in data.localities} == REGIONS
     orgs = [v for v in data.venues if v.org_kind is not None]
     assert len(orgs) >= 40 and any(not v.verified for v in orgs)
-    assert len(data.events) == TARGET_EVENTS
+    assert len(data.events) == TARGET_EVENTS + len(build_city_events())
     region = {loc.key: loc.region_code for loc in data.localities}
     assert {region[e.locality] for e in data.events} == REGIONS
     official = [e for e in data.events if e.organizer == "venue"]
@@ -39,6 +42,28 @@ def test_seed_files_are_valid() -> None:
     # События непроверенных организаций — только в ленте сообщества.
     unverified = {v.key for v in orgs if not v.verified}
     assert all(e.organizer is None for e in data.events if e.venue in unverified)
+
+
+def test_city_events_cover_both_feeds() -> None:
+    data = read_seed(default_seed_dir())
+    venues = {v.key: v for v in data.venues}
+    for city in CITIES:
+        events = [e for e in data.events if e.key.startswith(f"demo-{city}-")]
+        assert 15 <= len(events) <= 20
+        places = {v.key for v in venues.values() if v.locality == city}
+        assert 6 <= len({e.venue for e in events if e.venue}) <= len(places)
+        official = [e for e in events if e.organizer == "venue"]
+        community = [e for e in events if e.organizer is None]
+        assert official and community
+        assert all(venues[e.venue].verified for e in official if e.venue)
+        assert len({e.category for e in events}) >= 8
+        assert any(e.price_type == "free" for e in events)
+        assert any(e.category == "kids" for e in events)
+        assert any(e.pushkin_card for e in official)
+        # Сегодня, завтра и любые ближайшие выходные — в обеих лентах; горизонт — 2 недели.
+        for feed in (official, community):
+            days = {s.day for e in feed for s in e.sessions}
+            assert set(range(7)) <= days and max(days) <= 13
 
 
 def test_seed_is_deterministic() -> None:
@@ -149,3 +174,49 @@ async def test_seed_archives_dropped_events(db_session: AsyncSession) -> None:
 
     await load(db_session, data, now=now)
     assert await db_session.scalar(status) == EventStatus.published
+
+
+async def _all_items(client: httpx.AsyncClient, params: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        page = await client.get(
+            "/api/v1/events", params={**params, "cursor": cursor} if cursor else params
+        )
+        assert page.status_code == 200, page.text
+        body = page.json()
+        items += body["items"]
+        cursor = body.get("next_cursor")
+        if not cursor:
+            return items
+
+
+async def test_seed_cities_have_both_feeds_within_5km(
+    db_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    data = read_seed(default_seed_dir())
+    await load(db_session, data, now=datetime.now(TZ))
+    for key, name in CITIES.items():
+        seed = next(loc for loc in data.localities if loc.key == key)
+        locality = await db_session.scalar(
+            select(Locality)
+            .where(Locality.name == name)
+            .order_by(func.ST_Distance(Locality.point, geo_point(seed.lat, seed.lon)))
+            .limit(1)
+        )
+        assert locality is not None
+        titles = {
+            tier: {
+                e.title
+                for e in data.events
+                if e.key.startswith(f"demo-{key}-")
+                and (e.organizer == "venue") == (tier == "official")
+            }
+            for tier in ("official", "community")
+        }
+        for tier, expected in titles.items():
+            params = {"locality_id": locality.id, "tier": tier, "radius_km": 5, "limit": 50}
+            items = await _all_items(db_client, params)
+            assert expected <= {item["title"] for item in items}, (name, tier)
+            assert all(item["is_demo"] for item in items)
+            assert all((item["org"] is not None) == (tier == "official") for item in items)

@@ -192,6 +192,20 @@ async def test_web_login_unknown_code(
     assert _last(max_api, "send")["text"] == texts.WEB_LOGIN_EXPIRED
 
 
+async def test_web_code_without_bot_username(
+    db_settings: Settings, db_client: httpx.AsyncClient
+) -> None:
+    # Локально MAX_BOT_USERNAME пуст → сайт получает понятную ошибку, а не молчание.
+    db_settings.max_bot_username = ""
+    r = await db_client.post("/api/v1/auth/web-code")
+    assert r.status_code == 503
+    assert r.json()["error"] == {
+        "code": "bot_unavailable",
+        "message": "Вход через MAX сейчас недоступен",
+        "details": {},
+    }
+
+
 def test_code_from_start() -> None:
     assert web_login.code_from_start("login_abc234") == "ABC234"
     assert web_login.code_from_start("/start login_ABC234") == "ABC234"

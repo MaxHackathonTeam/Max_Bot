@@ -14,8 +14,10 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from redis.asyncio import Redis
 
+from app.bot.poller import HEARTBEAT_KEY
 from app.bot.subscriptions import check_webhook, config_problems, load_status, sync_commands
 from app.core.config import Settings, get_settings
 from app.integrations.max import MaxClient
@@ -52,6 +54,20 @@ def _subscription_problems(settings: Settings, subs: list[dict[str, Any]]) -> li
     return problems
 
 
+async def _poller_problems(redis: Redis) -> list[str]:
+    try:
+        beat = await redis.get(HEARTBEAT_KEY)
+    except Exception as exc:
+        return [f"Redis недоступен ({type(exc).__name__}) — не проверить, жив ли bot-poller"]
+    if beat is None:
+        return [
+            "bot-poller не опрашивает MAX (нет heartbeat) — локально запускай `make up` "
+            "(профиль compose `local`) и смотри `docker compose logs bot-poller`"
+        ]
+    print(f"bot-poller: последний опрос {_ts(int(beat))}")
+    return []
+
+
 async def diagnose(settings: Settings, client: MaxClient | None, redis: Redis | None) -> list[str]:
     """Печатает отчёт и возвращает список проблем."""
     problems: list[str] = []
@@ -65,6 +81,8 @@ async def diagnose(settings: Settings, client: MaxClient | None, redis: Redis | 
         problems.append("ADMIN_MAX_USER_IDS пуст — некому модерировать и получать заявки")
     if settings.bot_mode == "webhook":
         problems += config_problems(settings)
+    elif redis is not None:
+        problems += await _poller_problems(redis)
     if client is None:
         if "MAX_BOT_TOKEN не задан" not in problems:
             problems.append("MAX_BOT_TOKEN не задан")
@@ -72,6 +90,12 @@ async def diagnose(settings: Settings, client: MaxClient | None, redis: Redis | 
 
     try:
         me = await client.get_me()
+    except httpx.TransportError as exc:
+        problems.append(
+            f"GET /me: нет связи с {settings.max_api_base} ({type(exc).__name__}) — "
+            "проверь интернет, VPN/прокси и DNS; токен тут ни при чём"
+        )
+        return problems
     except Exception as exc:
         problems.append(f"GET /me не удался: {type(exc).__name__} — проверь MAX_BOT_TOKEN")
         return problems

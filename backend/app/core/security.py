@@ -46,7 +46,8 @@ def _secret_key(bot_token: str) -> bytes:
 
 
 def data_check_string(params: dict[str, str]) -> str:
-    return "\n".join(f"{k}={v}" for k, v in sorted(params.items()) if k != "hash")
+    # Как в Go-клиенте: сортируются готовые строки «k=v», а не ключи.
+    return "\n".join(sorted(f"{k}={v}" for k, v in params.items() if k != "hash"))
 
 
 def sign(params: dict[str, str], bot_token: str) -> str:

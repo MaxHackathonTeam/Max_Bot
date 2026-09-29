@@ -22,18 +22,18 @@ export interface CategoryLook {
 }
 
 const LOOKS: Record<string, CategoryLook> = {
-  concert: { icon: Music, color: "#9c3d2e" },
-  theatre: { icon: Drama, color: "#7a3b5e" },
-  cinema: { icon: Clapperboard, color: "#3e4a6b" },
-  exhibition: { icon: Frame, color: "#6b5a2e" },
-  masterclass: { icon: Hammer, color: "#7a5a1f" },
-  lecture: { icon: Presentation, color: "#3d5e63" },
-  festival: { icon: PartyPopper, color: "#a8402a" },
-  sport: { icon: Trophy, color: "#2f6b45" },
-  excursion: { icon: Compass, color: "#4a6131" },
-  games: { icon: Dices, color: "#5b4a7a" },
-  kids: { icon: ToyBrick, color: "#9a4e2b" },
-  other: { icon: Shapes, color: "#5b5247" },
+  concert: { icon: Music, color: "var(--cat-concert)" },
+  theatre: { icon: Drama, color: "var(--cat-theatre)" },
+  cinema: { icon: Clapperboard, color: "var(--cat-cinema)" },
+  exhibition: { icon: Frame, color: "var(--cat-exhibition)" },
+  masterclass: { icon: Hammer, color: "var(--cat-masterclass)" },
+  lecture: { icon: Presentation, color: "var(--cat-lecture)" },
+  festival: { icon: PartyPopper, color: "var(--cat-festival)" },
+  sport: { icon: Trophy, color: "var(--cat-sport)" },
+  excursion: { icon: Compass, color: "var(--cat-excursion)" },
+  games: { icon: Dices, color: "var(--cat-games)" },
+  kids: { icon: ToyBrick, color: "var(--cat-kids)" },
+  other: { icon: Shapes, color: "var(--cat-other)" },
 };
 
 export function categoryLook(slug: string | null | undefined): CategoryLook {

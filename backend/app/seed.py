@@ -2,13 +2,14 @@
 
 Сначала — справочник НП России (app.seed_localities, всегда), затем демо (SEED_DEMO=1).
 
-Населённые пункты и площадки — реальные, из data/seed/*.json; события генерирует
-app.demo.generate (фиксированный seed). Все события — `trust_tier=demo`, источник `demo`
-в `event_sources`, в ленте с плашкой. Загрузка идемпотентна: события находятся по
-(source, source_id), сеансы обновляются на месте. Даты относительные (`day` от сегодня
-в поясе населённого пункта), поэтому повторный запуск сдвигает их к текущей дате.
-Статус события (например, скрытие модерацией) и поля из `locked_fields` загрузка не меняет;
-демо-события, которых больше нет в наборе, уходят в архив.
+Населённые пункты и площадки — реальные, из data/seed/*.json (cities.json — отдельный слой
+Казани и Москвы); события генерирует app.demo.generate (фиксированный seed). Все события —
+`trust_tier=demo`, источник `demo` в `event_sources`, в ленте с плашкой. Загрузка
+идемпотентна: события находятся по (source, source_id), сеансы обновляются на месте. Даты
+относительные (`day` от сегодня в поясе населённого пункта), поэтому повторный запуск
+сдвигает их к текущей дате. Статус события (например, скрытие модерацией) и поля из
+`locked_fields` загрузка не меняет; демо-события, которых больше нет в наборе, уходят в
+архив.
 """
 
 import asyncio
@@ -29,7 +30,7 @@ from app import seed_localities
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.session import make_sessionmaker
-from app.demo.generate import build_events
+from app.demo.generate import build_city_events, build_events
 from app.models.enums import (
     AuditActor,
     EventStatus,
@@ -155,10 +156,14 @@ def read_seed(seed_dir: Path) -> SeedData:
         return items
 
     raw_localities, raw_venues = load("localities.json"), load("venues.json")
+    cities = json.loads((seed_dir / "cities.json").read_text(encoding="utf-8"))
+    events = build_events(raw_localities, raw_venues) + build_city_events()
     data = SeedData(
-        localities=[LocalitySeed.model_validate(x) for x in raw_localities],
-        venues=[VenueSeed.model_validate(x) for x in raw_venues],
-        events=[EventSeed.model_validate(x) for x in build_events(raw_localities, raw_venues)],
+        localities=[
+            LocalitySeed.model_validate(x) for x in [*raw_localities, *cities["localities"]]
+        ],
+        venues=[VenueSeed.model_validate(x) for x in [*raw_venues, *cities["venues"]]],
+        events=[EventSeed.model_validate(x) for x in events],
     )
     locality_keys = {loc.key for loc in data.localities}
     venue_keys = {v.key: v for v in data.venues}

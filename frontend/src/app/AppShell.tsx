@@ -2,6 +2,7 @@ import { Bookmark, Building, CalendarDays, ChevronLeft, CirclePlus, UserRound } 
 import type { MouseEvent, ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { ProfileMenu } from "../components/ProfileMenu";
+import { ThemeToggle } from "../components/ThemeSwitch";
 import { IconButton } from "../ui/Button";
 import { useRequireLogin } from "./login";
 import { useSession } from "./session";
@@ -63,6 +64,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </NavLink>
               ))}
             </nav>
+            <ThemeToggle />
             <ProfileMenu />
           </div>
         </div>
