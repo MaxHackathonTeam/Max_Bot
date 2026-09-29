@@ -95,7 +95,7 @@ export function feedToParams(f: FeedFilters): URLSearchParams {
   return params;
 }
 
-/** ?feed=today|weekend|pushkin из диплинка → фильтры; null, если параметра нет. */
+/** ?feed=today|weekend|pushkin|kids|free из диплинка → фильтры; null, если параметра нет. */
 export function deeplinkFeed(params: URLSearchParams): URLSearchParams | null {
   const feed = params.get("feed");
   if (feed === null) return null;
@@ -103,6 +103,8 @@ export function deeplinkFeed(params: URLSearchParams): URLSearchParams | null {
   next.delete("feed");
   if (feed === "today" || feed === "weekend") next.set("date", feed);
   if (feed === "pushkin") next.set("pushkin", "1");
+  if (feed === "kids") next.set("kids", "1");
+  if (feed === "free") next.set("free", "1");
   return next;
 }
 

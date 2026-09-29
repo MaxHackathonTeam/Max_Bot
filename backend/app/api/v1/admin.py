@@ -52,6 +52,17 @@ async def decide_event(
     )
 
 
+@router.delete("/events/{event_id}", status_code=204, summary="Удалить событие (чистка афиши)")
+async def delete_event(
+    event_id: int,
+    admin: AdminDep,
+    session: SessionDep,
+    notifier: NotifierDep,
+    reason: Annotated[str | None, Query(max_length=500)] = None,
+) -> None:
+    await moderation_service.admin_delete(session, admin.user, event_id, reason, notifier)
+
+
 @router.post(
     "/verifications/{request_id}/decision",
     response_model=VerificationOut,

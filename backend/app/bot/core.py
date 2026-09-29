@@ -9,7 +9,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot import fsm, texts
+from app.bot import fsm
 from app.bot.notify import BotNotifier
 from app.core.config import Settings
 from app.core.jobs import JobQueue, MemoryJobQueue
@@ -42,21 +42,10 @@ class BotContext:
         username = (await self.max.get_me()).get("username")
         return username if isinstance(username, str) and username else None
 
-    def site_url(self, path: str) -> str | None:
-        """Ссылка на сайт для link-кнопки; None, если PUBLIC_BASE_URL не https (локально)."""
-        base = self.settings.public_base_url.rstrip("/")
-        return f"{base}{path}" if base.startswith("https://") else None
 
-    def consent_text(self) -> str:
-        base = self.settings.public_base_url.rstrip("/")
-        return texts.CONSENT.format(
-            terms_url=f"{base}/legal/terms", privacy_url=f"{base}/legal/privacy"
-        )
-
-
-def event_path(event_id: int, status: str) -> str:
-    """Опубликованное — карточка на сайте, остальное автор видит в редакторе черновика."""
-    return f"/event/{event_id}" if status == "published" else f"/draft/{event_id}"
+def event_deeplink(event_id: int, status: str) -> str:
+    """Диплинк мини-приложения: опубликованное — карточка, остальное — редактор черновика."""
+    return f"ev_{event_id}" if status == "published" else f"draft_{event_id}"
 
 
 @dataclass(frozen=True)

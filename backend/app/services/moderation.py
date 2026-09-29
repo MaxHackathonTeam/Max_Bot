@@ -6,7 +6,7 @@
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,8 +57,10 @@ async def recipients(session: AsyncSession, event: Event) -> list[int]:
 
 
 async def notify_owner(session: AsyncSession, notifier: Notifier, event: Event, text: str) -> None:
+    # Опубликованное — карточка, остальное автор правит в черновике.
+    section = "ev" if event.status == EventStatus.published else "draft"
     for user_id in await recipients(session, event):
-        await notifier.send(user_id, text, f"ev_{event.id}")
+        await notifier.send(user_id, text, f"{section}_{event.id}")
 
 
 async def record_decision(
@@ -128,17 +130,15 @@ async def reject_by_rules(
 
 
 async def moderate_event(session: AsyncSession, event_id: int, *, notifier: Notifier) -> str | None:
-    """Задача воркера после отправки. Возвращает новый статус или None, если решать нечего.
+    """Задача воркера после отправки. Возвращает статус или None, если решать нечего.
 
-    Официальные события уже опубликованы — правила только фиксируют решение. Событие сообщества
-    без подозрительных признаков публикуется, иначе ждёт администратора с причинами.
+    Правила не публикуют: и official, и community ждут администратора (§6). Воркер считает
+    признаки подозрительности, пишет их причиной для модератора и зовёт модераторов.
     """
     event = await session.get(Event, event_id, with_for_update=True)
     if event is None:
         return None
-    tier = event.trust_tier
-    expected = EventStatus.published if tier == TrustTier.official else EventStatus.pending
-    if tier == TrustTier.demo or event.status != expected:
+    if event.trust_tier == TrustTier.demo or event.status != EventStatus.pending:
         return None
     points, reasons = rules.score(
         rules.EventData(
@@ -148,30 +148,18 @@ async def moderate_event(session: AsyncSession, event_id: int, *, notifier: Noti
         )
     )
     suspicious = points >= rules.SUSPICIOUS_SCORE
-    before = event.status
-    if tier == TrustTier.community and not suspicious:
-        event.status = EventStatus.published
-        event.published_at = event.published_at or utcnow()
-        event.moderation_reason = None
-    elif tier == TrustTier.community:
-        event.moderation_reason = "; ".join(reasons)
+    event.moderation_reason = "; ".join(reasons) if suspicious else None
     await record_decision(
         session,
         event,
         actor=ModerationActor.rules,
-        verdict=ModerationVerdict.review if suspicious else ModerationVerdict.approve,
+        verdict=ModerationVerdict.review,
         confidence=None,
         reasons={"score": points, "reasons": reasons},
-        status_before=before,
+        status_before=event.status,
     )
     await session.commit()
-    if before != event.status:
-        await notify_owner(
-            session, notifier, event, texts.EVENT_PUBLISHED.format(title=event.title)
-        )
-    elif event.status == EventStatus.pending:
-        # Правила не пропустили автоматически — заявка ждёт модератора.
-        await notifier.alert_moderators("e", event.id)
+    await notifier.alert_moderators("e", event.id)
     return str(event.status)
 
 
@@ -318,6 +306,46 @@ async def admin_decide(
     if before == EventStatus.pending:
         await notifier.moderation_closed("e", event.id)
     return event
+
+
+async def admin_delete(
+    session: AsyncSession,
+    admin_user: User,
+    event_id: int,
+    reason: str | None,
+    notifier: Notifier,
+) -> None:
+    """Администратор убирает афишу совсем (чистка): сеансы, «Пойду» и жалобы — каскадом.
+
+    Права проверяет вызывающий (AdminDep, ADMIN_MAX_USER_IDS в боте), как у admin_decide.
+    """
+    event = await session.get(Event, event_id, with_for_update=True)
+    if event is None:
+        raise AppError("event_not_found", "Событие не найдено", status_code=404)
+    reason = (reason or "").strip() or texts.MODERATION_DEFAULT_REASON
+    title, before = event.title, event.status
+    owners = await recipients(session, event)
+    await audit.record(
+        session,
+        action="event.admin_delete",
+        entity_type="event",
+        entity_id=event.id,
+        actor_type=AuditActor.admin,
+        actor_user_id=admin_user.id,
+        diff={
+            "title": title,
+            "status": str(before),
+            "trust_tier": str(event.trust_tier),
+            "reason": reason,
+        },
+    )
+    await session.execute(delete(Event).where(Event.id == event.id))
+    await session.commit()
+    text = texts.EVENT_DELETED_BY_ADMIN.format(title=title, reason=reason)
+    for user_id in owners:
+        await notifier.send(user_id, text)
+    if before == EventStatus.pending:
+        await notifier.moderation_closed("e", event_id)
 
 
 QueueFilter = Literal["new", "returned", "all"]

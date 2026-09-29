@@ -129,8 +129,8 @@ export function VerificationPanel({ org }: { org: Org }) {
       <div className="notice">
         <BadgeCheck size={18} aria-hidden />
         <span>
-          Организация проверена{org.verified_at ? ` ${formatDate(org.verified_at)}` : ""}. События сразу попадают в
-          «Официальные» с отметкой «Организатор проверен».
+          Организация проверена{org.verified_at ? ` ${formatDate(org.verified_at)}` : ""}. После проверки модератором
+          события попадают в «Официальные» с отметкой «Организатор проверен».
         </span>
       </div>
     );

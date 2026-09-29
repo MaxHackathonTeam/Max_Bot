@@ -514,7 +514,7 @@ async def patch(
             rejected = True
         else:
             event.content_hash = content_hash(event, sessions)
-            if rerun and event.trust_tier == TrustTier.community:
+            if rerun:
                 event.status = EventStatus.pending
     diff = audit.changes(before, _snapshot(event))
     if "sessions" in changed:
@@ -572,11 +572,8 @@ async def submit(
     await _check_limits(session, user, event, digest)
     event.content_hash = digest
     event.moderation_reason = None
-    if event.trust_tier == TrustTier.official:
-        event.status = EventStatus.published
-        event.published_at = event.published_at or utcnow()
-    else:
-        event.status = EventStatus.pending
+    # Публикует только администратор (§6): и official, и community ждут решения.
+    event.status = EventStatus.pending
     await audit.record(
         session,
         action="event.submit",
@@ -587,10 +584,9 @@ async def submit(
     )
     await session.commit()
     await jobs.enqueue(MODERATE_EVENT, event.id)
-    if event.status == EventStatus.pending:
-        await notifier.send(
-            user.id, texts.EVENT_PENDING_REVIEW.format(title=event.title), f"ev_{event.id}"
-        )
+    await notifier.send(
+        user.id, texts.EVENT_PENDING_REVIEW.format(title=event.title), f"draft_{event.id}"
+    )
     return event
 
 

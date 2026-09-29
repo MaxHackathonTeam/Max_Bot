@@ -99,7 +99,8 @@ def moderation_key(kind: str, entity_id: int) -> str:
 class ModerationCard:
     text: str
     status: str
-    url: str | None
+    # Диплинк мини-приложения на карточку модератора (из бота на сайт не ведём).
+    payload: str
 
 
 def _name(user: User | None) -> str:
@@ -108,14 +109,7 @@ def _name(user: User | None) -> str:
     return " ".join(p for p in (user.first_name, user.last_name) if p) or texts.MOD_NONE
 
 
-def _site_url(settings: Settings, path: str) -> str | None:
-    base = settings.public_base_url.rstrip("/")
-    return f"{base}{path}" if base.startswith("https://") else None
-
-
-async def _event_card(
-    session: AsyncSession, settings: Settings, event_id: int
-) -> ModerationCard | None:
+async def _event_card(session: AsyncSession, event_id: int) -> ModerationCard | None:
     event = await session.get(Event, event_id)
     if event is None:
         return None
@@ -145,12 +139,10 @@ async def _event_card(
         organizer=org.name if org else _name(author),
         reasons=event.moderation_reason or texts.MOD_NONE,
     )
-    return ModerationCard(text, str(event.status), _site_url(settings, f"/moderation/{event.id}"))
+    return ModerationCard(text, str(event.status), f"mod_{event.id}")
 
 
-async def _org_card(
-    session: AsyncSession, settings: Settings, request_id: int
-) -> ModerationCard | None:
+async def _org_card(session: AsyncSession, request_id: int) -> ModerationCard | None:
     request = await session.get(VerificationRequest, request_id)
     if request is None:
         return None
@@ -170,17 +162,15 @@ async def _org_card(
         method=texts.MOD_METHODS.get(request.method, request.method),
         submitter=_name(submitter),
     )
-    return ModerationCard(text, str(request.status), _site_url(settings, "/moderation"))
+    return ModerationCard(text, str(request.status), "mod_0")
 
 
-async def moderation_card(
-    db: SessionMaker, settings: Settings, kind: str, entity_id: int
-) -> ModerationCard | None:
+async def moderation_card(db: SessionMaker, kind: str, entity_id: int) -> ModerationCard | None:
     """kind: e — событие, v — заявка организации на проверку."""
     async with db() as session:
         if kind == "e":
-            return await _event_card(session, settings, entity_id)
-        return await _org_card(session, settings, entity_id)
+            return await _event_card(session, entity_id)
+        return await _org_card(session, entity_id)
 
 
 def _decode(data: dict[Any, Any]) -> dict[str, str]:
@@ -204,12 +194,12 @@ async def alert_moderators(
     if not admins:
         log.warning("moderators_not_configured", kind=kind, entity_id=entity_id)
         return []
-    card = await moderation_card(db, settings, kind, entity_id)
+    card = await moderation_card(db, kind, entity_id)
     if card is None or card.status != "pending":
         return []
     key = moderation_key(kind, entity_id)
     sent = _decode(await redis.hgetall(key))
-    keyboard = keyboards.moderation_alert(kind, entity_id, card.url)
+    keyboard = keyboards.moderation_alert(kind, entity_id, settings.max_bot_username, card.payload)
     failed: list[int] = []
     for admin_id in admins:
         if str(admin_id) in sent:
@@ -247,15 +237,18 @@ async def close_moderation(
 
     Возвращает число сообщений, которые не удалось поправить.
     """
-    card = await moderation_card(db, settings, kind, entity_id)
-    if card is None or card.status == "pending":
+    card = await moderation_card(db, kind, entity_id)
+    if card is None:
+        # Администратор удалил событие: карточки нет, закрываем сообщения вердиктом «удалено».
+        card = ModerationCard(texts.MOD_DELETED_CARD.format(id=entity_id), "deleted", "")
+    if card.status == "pending":
         return 0
     key = moderation_key(kind, entity_id)
     mids = _decode(await redis.hgetall(key))
     if not mids:
         return 0
     verdict = texts.MOD_VERDICTS.get(card.status, card.status)
-    keyboard = keyboards.moderation_closed(card.url)
+    keyboard = keyboards.moderation_closed(settings.max_bot_username, card.payload)
     failed = 0
     for mid in mids.values():
         try:

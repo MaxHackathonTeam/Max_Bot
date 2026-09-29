@@ -1,11 +1,12 @@
-"""Мастер «Добавить афишу» (§12): анонс целиком или по шагам.
+"""Мастер «Добавить афишу» (§12): только по шагам.
 
 Шаги: title → when → place → venue → category → price → description → cover → preview.
 Состояние — add.<шаг> (fsm.ADD_PREFIX), поля черновика — в данных FSM (Redis, TTL 24 ч).
-Разбор анонса — только детерминированные правила (app.parsing.extract).
+Ответы на шаги (дата, цена) разбирают детерминированные правила (app.parsing.extract).
 В БД событие появляется только по «Отправить на проверку»: те же event_editor.create/patch
 и submit, что у формы на сайте, — с правилами §6, лимитами, аудитом и уровнем доверия
 (community по умолчанию, official — от проверенной организации, где состоит автор).
+Опубликовать может только модератор.
 """
 
 import re
@@ -22,7 +23,7 @@ from app.bot.core import (
     Answer,
     BotContext,
     Target,
-    event_path,
+    event_deeplink,
     get_user,
     notifier_of,
     send,
@@ -33,7 +34,6 @@ from app.moderation import rules
 from app.parsing import extract
 from app.schemas.manage import EventCreate, EventPatch
 from app.schemas.venues import VenueIn
-from app.services import drafts as drafts_service
 from app.services import event_editor
 from app.services import localities as localities_service
 from app.services import media as media_service
@@ -49,7 +49,6 @@ STEPS = ("title", "when", "place", "venue", "category", "price", "description", 
 EDITABLE = STEPS[:-1]
 OPTIONAL = frozenset({"venue", "description", "cover"})
 REQUIRED = ("title", "when", "place", "category", "price")
-START = "start"  # ждём анонс или «Заполнить по шагам»
 ORG = "org"  # от проверенной организации или от себя
 OPTIONS = 5
 TITLE_MIN = 3
@@ -184,8 +183,8 @@ async def _save(ctx: BotContext, target: Target, step: str, data: dict[str, Any]
     await ctx.states.set_data(target.user_id, data)
 
 
-async def begin(ctx: BotContext, target: Target, text: str | None = None) -> None:
-    """/add и «➕ Добавить афишу»; text — анонс, присланный вне мастера."""
+async def begin(ctx: BotContext, target: Target) -> None:
+    """/add и «➕ Добавить афишу»."""
     async with ctx.db() as session:
         user = await get_user(session, target)
         consented = await users_service.has_required_consents(session, user)
@@ -205,70 +204,23 @@ async def begin(ctx: BotContext, target: Target, text: str | None = None) -> Non
         )
     if not consented:
         # Публиковать может только пользователь, принявший условия (§4).
-        prompt = f"{texts.ADD_NEED_CONSENT}\n\n{ctx.consent_text()}"
-        await send(ctx, target, prompt, keyboards.consent())
+        prompt = f"{texts.ADD_NEED_CONSENT}\n\n{texts.CONSENT}"
+        await send(ctx, target, prompt, keyboards.consent(await ctx.web_app_name()))
         return
     data: dict[str, Any] = {"filled": [], "org_id": None, "org_name": None}
     if locality is not None:
         data["user_locality"] = [locality.id, locality.name, locality.timezone]
     if orgs:
         data["orgs"] = orgs
-        data["pending_text"] = text
         await _save(ctx, target, ORG, data)
         await _ask_org(ctx, target, data)
         return
-    await _begin_input(ctx, target, data, text)
+    await _ask(ctx, target, "title", data, lead=texts.ADD_START)
 
 
 async def _ask_org(ctx: BotContext, target: Target, data: dict[str, Any]) -> None:
     options = [(int(k), v) for k, v in data.get("orgs", {}).items()]
     await send(ctx, target, texts.ADD_CHOOSE_ORG, keyboards.add_orgs(options))
-
-
-async def _begin_input(
-    ctx: BotContext, target: Target, data: dict[str, Any], text: str | None
-) -> None:
-    if text:
-        await _from_text(ctx, target, data, text)
-        return
-    await _save(ctx, target, START, data)
-    await send(ctx, target, texts.ADD_START, keyboards.add_start())
-
-
-async def _from_text(ctx: BotContext, target: Target, data: dict[str, Any], text: str) -> None:
-    """Анонс целиком: правила заполняют что смогли, остальное спросим, потом превью."""
-    source = text.strip()[: drafts_service.MAX_TEXT]
-    if len(source) < drafts_service.MIN_TEXT:
-        await _save(ctx, target, START, data)
-        await send(ctx, target, texts.ADD_TEXT_TOO_SHORT, keyboards.add_start())
-        return
-    data["filled"] = []
-    title = extract.title_line(source, rules.TITLE_MAX)
-    if len(title) >= TITLE_MIN:
-        data["title"] = title
-        _mark(data, "title")
-    if data.get("user_locality"):
-        loc_id, name, tz_name = data["user_locality"]
-        data.update(locality_id=loc_id, locality_name=name, tz=tz_name)
-        _mark(data, "place")
-    tz = _tz(data)
-    now = datetime.now(tz)
-    start = drafts_service.start_from_text(source, now.date(), tz) or parse_when(source, now)
-    if start is not None and start > now:
-        data["start_local"] = start.astimezone(tz).replace(tzinfo=None).isoformat("T", "minutes")
-        _mark(data, "when")
-    categories = extract.find_categories(extract.tokenize(source))
-    if categories.slugs:
-        data["category"] = categories.slugs[0]
-        _mark(data, "category")
-    price = extract.find_price(source)
-    if price is not None:
-        _set_price(data, price.price_type, price.price_min, price.price_max)
-        _mark(data, "price")
-    data["description"] = source[: rules.DESCRIPTION_MAX]
-    _mark(data, "description")
-    await send(ctx, target, texts.ADD_PARSED)
-    await _next(ctx, target, data, None)
 
 
 # --- Шаги --------------------------------------------------------------------------------
@@ -350,8 +302,6 @@ async def on_message(
         return
     if step == "cover" and image_url:
         await _on_cover(ctx, target, data, image_url)
-    elif step == START:
-        await _from_text(ctx, target, data, text)
     elif step == ORG:
         await _ask_org(ctx, target, data)
     elif not text:
@@ -508,13 +458,11 @@ async def on_callback(ctx: BotContext, target: Target, args: list[str], answer: 
         await send(ctx, target, texts.ADD_CANCELLED, keyboards.menu_button())
     elif action == "back":
         await _back(ctx, target, step, data)
-    elif action == "steps" and step == START:
-        await _ask(ctx, target, "title", data)
     elif action == "org" and step == ORG and arg is not None:
         orgs = data.get("orgs", {})
         if arg in orgs:
             data.update(org_id=int(arg), org_name=orgs[arg])
-        await _begin_input(ctx, target, data, data.pop("pending_text", None))
+        await _ask(ctx, target, "title", data, lead=texts.ADD_START)
     elif action == "skip" and step in OPTIONAL:
         for key in _SKIP_KEYS[step]:
             data.pop(key, None)
@@ -543,9 +491,7 @@ async def on_callback(ctx: BotContext, target: Target, args: list[str], answer: 
 
 
 async def _repeat(ctx: BotContext, target: Target, step: str, data: dict[str, Any]) -> None:
-    if step == START:
-        await _begin_input(ctx, target, data, None)
-    elif step == ORG:
+    if step == ORG:
         await _ask_org(ctx, target, data)
     else:
         await _ask(ctx, target, step, data)
@@ -554,7 +500,12 @@ async def _repeat(ctx: BotContext, target: Target, step: str, data: dict[str, An
 async def _back(ctx: BotContext, target: Target, step: str, data: dict[str, Any]) -> None:
     data.pop("editing", None)
     if step not in STEPS or step == "title":
-        await _begin_input(ctx, target, data, None)
+        # С первого шага назад некуда: выбор организации, если он был, иначе снова название.
+        if data.get("orgs"):
+            await _save(ctx, target, ORG, data)
+            await _ask_org(ctx, target, data)
+        else:
+            await _ask(ctx, target, "title", data)
         return
     await _ask(ctx, target, STEPS[STEPS.index(step) - 1], data)
 
@@ -676,11 +627,7 @@ async def _submit(ctx: BotContext, target: Target, data: dict[str, Any]) -> None
         await _ask(ctx, target, "preview", data, lead=lead)
         return
     await ctx.states.set(target.user_id, fsm.IDLE)
-    done = texts.ADD_SENT_PUBLISHED if status == EventStatus.published else texts.ADD_SENT_PENDING
-    keyboard = keyboards.link_and_menu(
-        texts.ADD_OPEN_SITE,
-        ctx.site_url(event_path(event_id, status)),
-        await ctx.web_app_name(),
-        f"ev_{event_id}",
+    keyboard = keyboards.app_and_menu(
+        texts.ADD_OPEN_APP, await ctx.web_app_name(), event_deeplink(event_id, status)
     )
-    await send(ctx, target, done.format(title=title), keyboard)
+    await send(ctx, target, texts.ADD_SENT_PENDING.format(title=title), keyboard)

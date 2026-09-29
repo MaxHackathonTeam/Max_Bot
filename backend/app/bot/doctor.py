@@ -128,9 +128,15 @@ async def diagnose(
     print(f"MAX_BOT_USERNAME: {settings.max_bot_username or '— не задан'}")
     print(f"ADMIN_MAX_USER_IDS: задано {len(settings.admin_max_user_ids)} шт.")
     if not settings.max_bot_username:
-        problems.append("MAX_BOT_USERNAME не задан — не работают ссылки на бота и вход кодом")
+        problems.append(
+            "MAX_BOT_USERNAME не задан — не работают ссылки на бота, вход кодом "
+            "и кнопки мини-приложения у модераторов"
+        )
     if not settings.admin_max_user_ids:
-        problems.append("ADMIN_MAX_USER_IDS пуст — некому модерировать и получать заявки")
+        problems.append(
+            "ADMIN_MAX_USER_IDS пуст — некому модерировать: все афиши ждут решения "
+            "администратора и без него не публикуются"
+        )
     if settings.bot_mode == "webhook":
         problems += config_problems(settings)
         if redis is not None:

@@ -77,7 +77,6 @@ async def send_profile(ctx: BotContext, target: Target, org_id: int, answer: Ans
     await answer()
     keyboard = keyboards.org_profile(
         org.id,
-        url=ctx.site_url(f"/org/{org.id}"),
         web_app=await ctx.web_app_name(),
         official=org.official_events,
         community=org.community_events,
@@ -120,10 +119,7 @@ async def send_events(
         text = render.feed(title, place, None, page.items, offset, tier=tier)
     keyboard = keyboards.org_events(
         await ctx.web_app_name(),
-        [
-            (c.id, c.next_session.id if c.next_session else None, ctx.site_url(f"/event/{c.id}"))
-            for c in page.items
-        ],
+        [(c.id, c.next_session.id if c.next_session else None) for c in page.items],
         org_id=org.id,
         tier=tier_code,
         next_cursor=page.next_cursor,
