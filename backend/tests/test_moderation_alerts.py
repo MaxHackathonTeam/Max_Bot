@@ -295,8 +295,8 @@ async def test_reject_asks_reason_and_notifies_author(
 ) -> None:
     event, author = await _pending_event(db_session)
     await handle_update(bot, _callback(ADMIN, f"mod:e:{event.id}:reject"))
-    # Кнопка отвечена без тоста, причина спрашивается сообщением.
-    assert _answers(max_api)[-1] == {}
+    # Без тоста POST /answers не шлём (MAX отклоняет пустой ответ), причина — сообщением.
+    assert _answers(max_api) == []
     assert _sent(max_api)[-1]["text"] == texts.MOD_ASK_REASON
     await db_session.refresh(event)
     assert event.status == "pending"

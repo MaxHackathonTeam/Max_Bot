@@ -159,8 +159,33 @@ async def test_callback_from_schema_gets_answer(
     db_app: FastAPI, db_settings: Settings, max_api: respx.MockRouter
 ) -> None:
     await _deliver(db_app, db_settings, message_callback(random_max_id(), keyboards.CB_MENU))
-    # На нажатие кнопки бот обязательно отвечает (POST /answers), иначе у кнопки крутится часик.
+    # Реакция на нажатие — тост через POST /answers или новое сообщение (меню).
     assert max_api["answer"].called or max_api["send"].called
+
+
+async def test_callback_without_toast_sends_no_empty_answer(
+    db_app: FastAPI, db_settings: Settings, max_api: respx.MockRouter
+) -> None:
+    """Прод 29.09: на пустой POST /answers MAX отвечает 400 «`message` or `notification`
+    required», и бот показывал «Что-то пошло не так» на любую кнопку."""
+    max_api.post("/answers", name="answer").mock(
+        side_effect=lambda r: (
+            httpx.Response(200, json={"success": True})
+            if json.loads(r.content)
+            else httpx.Response(
+                400,
+                json={
+                    "code": "proto.payload",
+                    "message": "Invalid request. `message` or `notification` required",
+                },
+            )
+        )
+    )
+    await _deliver(db_app, db_settings, message_callback(random_max_id(), keyboards.CB_MENU))
+    answers = [json.loads(c.request.content) for c in max_api["answer"].calls]
+    assert {} not in answers and {"notification": texts.ERROR} not in answers
+    sent = _sent(max_api)
+    assert sent and all(m["text"] != texts.ERROR for m in sent)
 
 
 class BrokenSink(Sink):

@@ -180,11 +180,17 @@ class MaxClient:
         notification: str | None = None,
         message: dict[str, Any] | None = None,
     ) -> None:
+        """POST /answers. В схеме оба поля CallbackAnswer необязательны, но прод MAX на пустой
+        ответ отдаёт 400 proto.payload «`message` or `notification` required» (проверено по логам
+        29.09) — поэтому без уведомления и правки сообщения запрос не отправляем.
+        """
         body: dict[str, Any] = {}
         if notification is not None:
             body["notification"] = notification
         if message is not None:
             body["message"] = message
+        if not body:
+            return
         await self.request("POST", "/answers", params={"callback_id": callback_id}, json=body)
 
     async def get_updates(
