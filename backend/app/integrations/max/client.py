@@ -180,12 +180,21 @@ class MaxClient:
         notification: str | None = None,
         message: dict[str, Any] | None = None,
     ) -> None:
+        """POST /answers. В CallbackAnswer оба поля необязательны, но описание метода говорит об
+        «updated message or/and notification»: пустой ответ MAX может отклонить 400. Это не сбой
+        обработчика — нажатие уже обработано, поэтому такую ошибку только логируем.
+        """
         body: dict[str, Any] = {}
         if notification is not None:
             body["notification"] = notification
         if message is not None:
             body["message"] = message
-        await self.request("POST", "/answers", params={"callback_id": callback_id}, json=body)
+        try:
+            await self.request("POST", "/answers", params={"callback_id": callback_id}, json=body)
+        except MaxApiError as exc:
+            if body or exc.status_code != 400:
+                raise
+            log.warning("max_callback_empty_answer_rejected", code=exc.code)
 
     async def get_updates(
         self,

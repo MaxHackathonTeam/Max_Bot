@@ -163,6 +163,23 @@ async def test_callback_from_schema_gets_answer(
     assert max_api["answer"].called or max_api["send"].called
 
 
+async def test_callback_empty_answer_rejected_is_not_an_error(
+    db_app: FastAPI, db_settings: Settings, max_api: respx.MockRouter
+) -> None:
+    """Прод: MAX отвечает 400 на пустой POST /answers — не показываем «Что-то пошло не так»."""
+    max_api.post("/answers", name="answer").mock(
+        side_effect=lambda r: httpx.Response(
+            200 if json.loads(r.content) else 400,
+            json={"success": True} if json.loads(r.content) else {"code": "proto.payload"},
+        )
+    )
+    await _deliver(db_app, db_settings, message_callback(random_max_id(), keyboards.CB_MENU))
+    answers = [json.loads(c.request.content) for c in max_api["answer"].calls]
+    assert {"notification": texts.ERROR} not in answers
+    sent = _sent(max_api)
+    assert sent and all(m["text"] != texts.ERROR for m in sent)
+
+
 class BrokenSink(Sink):
     async def put(self, update: dict[str, Any]) -> None:
         raise ConnectionError("redis down")
