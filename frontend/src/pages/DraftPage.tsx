@@ -13,7 +13,6 @@ import {
   Plus,
   Search,
   Send,
-  Sparkles,
   Trash,
   TriangleAlert,
   X,
@@ -51,7 +50,6 @@ import {
   firstInvalidStep,
   fromManage,
   manageToCard,
-  PARSED_LABELS,
   STEP,
   STEPS,
   stepErrors,
@@ -685,7 +683,6 @@ export function Editor({ event, orgId, initialStep }: { event: EventManage | nul
     }
     save.mutate(step);
   };
-  const parsed = (event?.ai_fields ?? []).filter((f) => PARSED_LABELS[f]);
 
   return (
     <main className="page page--narrow">
@@ -708,20 +705,6 @@ export function Editor({ event, orgId, initialStep }: { event: EventManage | nul
             <CircleAlert size={18} aria-hidden />
             <span>
               {event.status === "draft" ? "Вернули на доработку" : "Причина"}: {event.moderation_reason}
-            </span>
-          </div>
-        )}
-        {parsed.length > 0 && event?.status === "draft" && (
-          <div className="notice notice--sun">
-            <Sparkles size={18} aria-hidden />
-            <span>
-              Из анонса распознали:{" "}
-              {parsed.map((f) => (
-                <mark key={f} className="parsed">
-                  {PARSED_LABELS[f]}
-                </mark>
-              ))}
-              . Проверь каждый шаг — разбор мог ошибиться.
             </span>
           </div>
         )}

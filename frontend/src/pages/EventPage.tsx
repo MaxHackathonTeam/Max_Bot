@@ -8,17 +8,21 @@ import {
   ChevronRight,
   Clock,
   ExternalLink,
+  EyeOff,
   Info,
   MapPin,
   MapPinned,
   MonitorPlay,
   Phone,
   Share2,
+  ShieldCheck,
   Ticket,
+  Trash,
   UserRound,
 } from "lucide-react";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { decideEvent, deleteAdminEvent } from "../api/admin";
 import {
   ApiError,
   fetchEvent,
@@ -28,12 +32,15 @@ import {
   type EventDetail,
   type SessionInfo,
 } from "../api/client";
+import { useMe } from "../app/profile";
 import { useSession } from "../app/session";
 import { haptic, isMobileMax, openExternal, shareContent } from "../bridge/actions";
 import { getWebApp } from "../bridge/webApp";
 import { DemoBadge, EventBadges } from "../components/Badges";
 import { CategoryLabel } from "../components/CategoryLabel";
+import { ConfirmAction } from "../components/ConfirmAction";
 import { ConsentPrompt } from "../components/ConsentPrompt";
+import { FormErrors } from "../components/FormErrors";
 import { formatDate, formatDateParts, formatDistance, formatPrice, formatTime, formatWhen } from "../lib/format";
 import { Button } from "../ui/Button";
 import { cx } from "../ui/classes";
@@ -128,12 +135,76 @@ function SessionRow({ event, session }: { event: EventDetail; session: SessionIn
   );
 }
 
+/** Модератору: снять или удалить любую афишу прямо со страницы события. Права проверяет бэкенд. */
+function AdminPanel({ event }: { event: EventDetail }) {
+  const client = useQueryClient();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const done = (message: string) => {
+    void client.invalidateQueries({ queryKey: ["admin-queue"] });
+    client.removeQueries({ queryKey: ["event", event.id] });
+    toast.show(message, "success");
+  };
+  const hide = useMutation({
+    mutationFn: () => decideEvent(event.id, "hide", null),
+    onSuccess: () => {
+      done("Снято с публикации — автору ушло уведомление");
+      navigate(`/moderation/${event.id}`);
+    },
+  });
+  const remove = useMutation({
+    mutationFn: () => deleteAdminEvent(event.id, null),
+    onSuccess: () => {
+      done("Событие удалено — автору ушло уведомление");
+      navigate("/moderation");
+    },
+  });
+  const busy = hide.isPending || remove.isPending;
+  return (
+    <div className="stub">
+      <div className="stub__head">
+        <span className="row">
+          <ShieldCheck size={18} aria-hidden /> Модерация
+        </span>
+      </div>
+      <div className="stub__body stack stack--tight">
+        <FormErrors error={hide.error ?? remove.error} />
+        {event.status === "published" && (
+          <ConfirmAction
+            variant="secondary"
+            icon={<EyeOff size={16} aria-hidden />}
+            label="Снять с публикации"
+            warning="Афиша пропадёт из ленты, автору придёт сообщение. Вернуть можно в карточке модерации."
+            confirmLabel="Да, снять"
+            disabled={busy}
+            loading={hide.isPending}
+            onConfirm={() => hide.mutate()}
+          />
+        )}
+        <ConfirmAction
+          icon={<Trash size={16} aria-hidden />}
+          label="Удалить афишу"
+          warning="Афиша удалится насовсем вместе с сеансами и отметками «Пойду». Отменить нельзя."
+          confirmLabel="Да, удалить"
+          disabled={busy}
+          loading={remove.isPending}
+          onConfirm={() => remove.mutate()}
+        />
+        <Link className="small" to={`/moderation/${event.id}`}>
+          Открыть в модерации — с причиной и историей
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 /** Карточка события (FR-EV-1…4). */
 export function EventPage() {
   const id = Number(useParams().id);
   const valid = Number.isInteger(id) && id > 0;
   const event = useQuery({ queryKey: ["event", id], queryFn: () => fetchEvent(id), enabled: valid });
   const toast = useToast();
+  const me = useMe();
   const [sharing, setSharing] = useState(false);
 
   if (!valid) return <ErrorScreen message="Событие не найдено" />;
@@ -305,6 +376,7 @@ export function EventPage() {
               </Button>
             </div>
           </div>
+          {me.data?.is_admin && <AdminPanel event={e} />}
         </aside>
       </div>
     </main>
