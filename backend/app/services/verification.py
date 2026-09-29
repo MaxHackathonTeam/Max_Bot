@@ -92,8 +92,7 @@ def check_inn(inn: str) -> dict[str, Any]:
 def contact_hash_valid(vcf_info: str, received: str, bot_token: str) -> bool:
     """HMAC-SHA256(ключ — токен бота, сообщение — vcf_info) по §5.3.
 
-    В api-schema MAX алгоритм и кодировка `hash` не описаны: принимаем hex и base64,
-    проверка на живом устройстве — в docs/HUMAN_TODO.md.
+    В api-schema MAX алгоритм и кодировка `hash` не описаны: принимаем hex и base64.
     """
     if not vcf_info or not received or not bot_token:
         return False

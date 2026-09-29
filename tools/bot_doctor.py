@@ -2,7 +2,7 @@
 
 Локально (из корня репозитория, .env рядом):
     cd backend && uv run python ../tools/bot_doctor.py [--fix]
-На сервере — внутри контейнера, см. docs/DEPLOY.md:
+На сервере — внутри контейнера:
     docker compose -f compose.yaml -f compose.prod.yaml exec api python -m app.bot.doctor
 """
 
