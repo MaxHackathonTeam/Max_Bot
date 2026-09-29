@@ -233,9 +233,11 @@ async def cancel_event(event_id: int, auth: AuthDep, session: SessionDep) -> Eve
     return await event_editor.manage_view(session, auth.user, event_id)
 
 
-@router.delete("/{event_id}", status_code=204, summary="Удалить черновик")
-async def delete_event(event_id: int, auth: AuthDep, session: SessionDep) -> Response:
-    await event_editor.remove(session, auth.user, event_id)
+@router.delete("/{event_id}", status_code=204, summary="Удалить своё событие")
+async def delete_event(
+    event_id: int, auth: AuthDep, session: SessionDep, notifier: NotifierDep
+) -> Response:
+    await event_editor.remove(session, auth.user, event_id, notifier)
     return Response(status_code=204)
 
 

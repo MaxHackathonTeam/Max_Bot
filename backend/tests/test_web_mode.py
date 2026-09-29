@@ -21,9 +21,9 @@ from app.integrations.max import MaxClient
 from app.models.events import SavedSession
 from app.models.system import AuditLog
 from app.models.users import User
-from app.services import drafts, search_parse, web_login
+from app.services import search_parse, web_login
 from tests.factories import make_event, make_locality, random_area
-from tests.helpers import login, random_max_id
+from tests.helpers import random_max_id
 
 BASE = "https://max.test"
 WEDNESDAY = datetime(2026, 9, 30, 9, tzinfo=UTC)
@@ -239,19 +239,3 @@ async def test_search_parse_rules(db_session: AsyncSession) -> None:
     assert weekend.free and weekend.date == "weekend"
     unknown = await search_parse.parse(db_session, "фыва пролд", now=WEDNESDAY)
     assert unknown.fallback and unknown.q == "фыва пролд"
-
-
-async def test_draft_from_text(db_client: httpx.AsyncClient, db_session: AsyncSession) -> None:
-    _, me = await login(db_client)
-    user = await db_session.get(User, me["id"])
-    assert user is not None
-    text = (
-        "Концерт народного хора\n"
-        "15 октября в 18:00, вход свободный. Принимаем Пушкинскую карту.\n"
-        "Подробности: https://example.org/concert"
-    )
-    event = await drafts.create_from_text(db_session, user, text, None)
-    assert event.title == "Концерт народного хора"
-    assert event.category == "concert"
-    assert event.pushkin_card is True
-    assert {"title", "category", "pushkin_card"} <= set(event.ai_fields or [])

@@ -13,7 +13,7 @@ from typing import Any
 
 import snowballstemmer
 
-from app.parsing.dictionaries import ADDRESS_MARKERS, CATEGORY_KEYWORDS, MONTHS, WEEKDAYS
+from app.parsing.dictionaries import CATEGORY_KEYWORDS, MONTHS, WEEKDAYS
 
 Span = tuple[int, int]
 
@@ -252,44 +252,6 @@ def find_price(text: str) -> PriceHit | None:
     if prices:
         return PriceHit("paid", Decimal(min(prices)), Decimal(max(prices)))
     return None
-
-
-# --- Контакты и адрес ------------------------------------------------------------------
-
-_PHONE_RE = re.compile(r"(?<!\d)(?:\+7|8)[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}(?!\d)")
-_URL_RE = re.compile(r"https?://[^\s<>\"'()]+", re.I)
-_ADDRESS_RE = re.compile(
-    r"(?<![\w-])(?:"
-    + "|".join(re.escape(m) for m in sorted(ADDRESS_MARKERS, key=len, reverse=True))
-    + r")\.?\s+[А-ЯЁA-Z0-9][^\n,;]{1,60}(?:,\s*(?:д\.\s*)?\d+[а-яА-Я]?(?:/\d+)?)?",
-)
-
-
-def find_phone(text: str) -> str | None:
-    m = _PHONE_RE.search(text)
-    if m is None:
-        return None
-    return "+7" + re.sub(r"\D", "", m.group())[-10:]
-
-
-def find_urls(text: str) -> list[str]:
-    return [m.group().rstrip(".,;:!?") for m in _URL_RE.finditer(text)]
-
-
-def find_address(text: str) -> str | None:
-    m = _ADDRESS_RE.search(text)
-    return m.group().strip().rstrip(".") if m else None
-
-
-def title_line(text: str, limit: int = 120) -> str:
-    """Первая содержательная строка: без ссылок и хештегов, минимум три буквы."""
-    for raw in text.splitlines():
-        line = _URL_RE.sub("", raw)
-        line = re.sub(r"#\w+", "", line)
-        line = re.sub(r"^[^\wА-Яа-яЁё«\"]+", "", line).strip(" \t-–—•*|:")
-        if len(re.findall(r"[а-яёa-z]", line, re.I)) >= 3:
-            return line[:limit].strip()
-    return text.strip()[:limit].strip()
 
 
 # --- Категории -------------------------------------------------------------------------

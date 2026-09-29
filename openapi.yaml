@@ -1379,7 +1379,7 @@
         "tags": [
           "events"
         ],
-        "summary": "Удалить черновик",
+        "summary": "Удалить своё событие",
         "operationId": "delete_event_api_v1_events__event_id__delete",
         "security": [
           {
@@ -2726,52 +2726,6 @@
         }
       }
     },
-    "/api/v1/drafts/from-text": {
-      "post": {
-        "tags": [
-          "search"
-        ],
-        "summary": "Черновик из текста или пересланного поста",
-        "operationId": "from_text_api_v1_drafts_from_text_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DraftIn"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EventManage"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
     "/api/v1/drafts/{event_id}": {
       "get": {
         "tags": [
@@ -3995,32 +3949,6 @@
           "reasons"
         ],
         "title": "DecisionItem"
-      },
-      "DraftIn": {
-        "properties": {
-          "text": {
-            "type": "string",
-            "maxLength": 4000,
-            "minLength": 1,
-            "title": "Text"
-          },
-          "org_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Org Id"
-          }
-        },
-        "type": "object",
-        "required": [
-          "text"
-        ],
-        "title": "DraftIn"
       },
       "EventCard": {
         "properties": {

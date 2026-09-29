@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarPlus, CircleAlert, EyeOff, PencilLine, Send } from "lucide-react";
+import { Ban, CalendarPlus, CircleAlert, PencilLine, Send, Trash } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { Me } from "../api/client";
-import { cancelEvent, fetchMyEvents, submitEvent, type MyEventItem } from "../api/organizer";
+import { cancelEvent, deleteEvent, fetchMyEvents, submitEvent, type MyEventItem } from "../api/organizer";
 import { hasConsent } from "../app/profile";
+import { ConfirmAction } from "../components/ConfirmAction";
 import { ConsentPrompt } from "../components/ConsentPrompt";
 import { FormErrors } from "../components/FormErrors";
 import { StatusChips } from "../components/ManagedEventList";
@@ -27,16 +28,25 @@ function MyEventRow({ event }: { event: MyEventItem }) {
     mutationFn: () => submitEvent(event.id),
     onSuccess: (e) => {
       refresh();
-      toast.show(e.status === "published" ? "Опубликовано" : "Отправили на проверку — итог придёт в бот", "success");
+      if (e.status === "rejected") toast.show(`Правила отклонили: ${e.moderation_reason ?? "см. замечания"}`, "error");
+      else toast.show("Отправили на проверку — итог придёт в бот", "success");
     },
   });
-  const unpublish = useMutation({
+  const cancel = useMutation({
     mutationFn: () => cancelEvent(event.id),
     onSuccess: () => {
       refresh();
-      toast.show("Снято с публикации", "success");
+      toast.show(pending ? "Отозвали с проверки" : "Событие отменено", "success");
     },
   });
+  const remove = useMutation({
+    mutationFn: () => deleteEvent(event.id),
+    onSuccess: () => {
+      refresh();
+      toast.show("Событие удалено", "success");
+    },
+  });
+  const pending = event.status === "pending";
   const status = authorStatus(event);
   const when = event.next_starts_at ? formatWhen(event.next_starts_at, event.timezone) : "без будущих сеансов";
   return (
@@ -55,7 +65,7 @@ function MyEventRow({ event }: { event: MyEventItem }) {
           <span>Причина: {status.reason}</span>
         </p>
       )}
-      <FormErrors error={resubmit.error ?? unpublish.error} />
+      <FormErrors error={resubmit.error ?? cancel.error ?? remove.error} />
       <div className="row row--wrap">
         {status.editable && (
           <ButtonLink to={`/draft/${event.id}`} variant="secondary" size="sm" icon={<PencilLine size={16} aria-hidden />}>
@@ -68,16 +78,33 @@ function MyEventRow({ event }: { event: MyEventItem }) {
           </Button>
         )}
         {status.cancellable && (
-          <Button
-            variant="ghost"
+          <ConfirmAction
             size="sm"
-            loading={unpublish.isPending}
-            icon={<EyeOff size={16} aria-hidden />}
-            onClick={() => unpublish.mutate()}
-          >
-            {event.status === "pending" ? "Отозвать" : "Снять с публикации"}
-          </Button>
+            icon={<Ban size={16} aria-hidden />}
+            label={pending ? "Отозвать с проверки" : "Отменить событие"}
+            warning={
+              pending
+                ? "Заявка уйдёт с проверки, событие не опубликуется."
+                : "Событие останется в ленте с пометкой «Отменено», тем, кто собирался, придёт сообщение в бот."
+            }
+            confirmLabel={pending ? "Да, отозвать" : "Да, отменить"}
+            loading={cancel.isPending}
+            onConfirm={() => cancel.mutate()}
+          />
         )}
+        <ConfirmAction
+          size="sm"
+          icon={<Trash size={16} aria-hidden />}
+          label="Удалить"
+          warning={
+            status.cancellable
+              ? "Событие исчезнет из ленты и из твоих афиш насовсем, тем, кто собирался, придёт сообщение об отмене."
+              : "Событие удалится насовсем, вернуть его не получится."
+          }
+          confirmLabel="Да, удалить"
+          loading={remove.isPending}
+          onConfirm={() => remove.mutate()}
+        />
       </div>
     </Card>
   );
@@ -128,7 +155,7 @@ function MyEvents({ me }: { me: Me }) {
   );
 }
 
-/** /my — афиши автора: статусы, причина отказа, правка, повторная отправка, снятие. */
+/** /my — афиши автора: статусы, причина отказа, правка, повторная отправка, отмена и удаление. */
 export function MyEventsPage() {
   return (
     <RequireMax title="Мои афиши" text="Войди через MAX, чтобы видеть свои афиши и ответы модерации.">

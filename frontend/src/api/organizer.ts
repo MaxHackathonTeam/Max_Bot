@@ -363,7 +363,7 @@ export const STATUS_FILTERS: (string | null)[] = [
   "cancelled",
 ];
 
-// --- Разбор анонса и проверка перед отправкой -------------------------------------------------
+// --- Проверка перед отправкой -----------------------------------------------------------------
 
 export interface CheckViolation {
   code: string;
@@ -381,9 +381,3 @@ export interface CheckOut {
 export const checkEvent = (id: number) =>
   api<CheckOut>(`/events/${id}/check`, { method: "POST" });
 
-/** Черновик из текста анонса: детерминированный разбор, распознанное — в ai_fields. */
-export const draftFromText = (text: string, orgId: number | null) =>
-  api<EventManage>("/drafts/from-text", {
-    method: "POST",
-    body: JSON.stringify({ text, org_id: orgId }),
-  });

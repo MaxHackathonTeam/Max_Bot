@@ -254,9 +254,14 @@ async def test_official_flow_and_team(
 
     r = await db_client.post(f"/api/v1/events/{event['id']}/cancel", headers=owner)
     assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    # Своё событие автор удаляет в любом статусе, чужое — нет.
+    assert (
+        await db_client.delete(f"/api/v1/events/{event['id']}", headers=outsider)
+    ).status_code == 403
     assert (
         await db_client.delete(f"/api/v1/events/{event['id']}", headers=owner)
-    ).status_code == 409
+    ).status_code == 204
+    assert await db_session.get(Event, event["id"]) is None
 
 
 async def test_admin_delete_event(db_client: httpx.AsyncClient, db_session: AsyncSession) -> None:
@@ -271,6 +276,24 @@ async def test_admin_delete_event(db_client: httpx.AsyncClient, db_session: Asyn
     assert await db_session.get(Event, event["id"]) is None
     r = await db_client.delete(url, headers=admin)
     assert r.status_code == 404 and r.json()["error"]["code"] == "event_not_found"
+
+
+async def test_admin_hides_published(
+    db_app: FastAPI, db_client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    _, venue_id = await _place(db_session)
+    author, _ = await login_as(db_client)
+    event = await _create(db_client, author, _body(venue_id))
+    await db_client.post(f"/api/v1/events/{event['id']}/submit", headers=author)
+    await _moderate(db_app, event["id"])
+    await _approve(db_client, event["id"])
+    decision = f"/api/v1/admin/events/{event['id']}/decision"
+    r = await db_client.post(decision, json={"action": "hide"}, headers=author)
+    assert r.status_code == 403
+    admin, _ = await login_as(db_client, 777)
+    r = await db_client.post(decision, json={"action": "hide"}, headers=admin)
+    assert r.status_code == 204
+    assert (await db_client.get(f"/api/v1/events/{event['id']}")).status_code == 404
 
 
 async def test_delete_draft(db_client: httpx.AsyncClient, db_session: AsyncSession) -> None:

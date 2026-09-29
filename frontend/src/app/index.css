@@ -1769,15 +1769,6 @@ fieldset.filter-group > legend {
   max-width: 560px;
 }
 
-mark.parsed {
-  background: var(--sun-tint);
-  color: inherit;
-  padding: 0 4px;
-  margin-right: 4px;
-  border-radius: var(--r-sm);
-  font-weight: 600;
-}
-
 .page--flush {
   flex: none;
   padding-bottom: 0;

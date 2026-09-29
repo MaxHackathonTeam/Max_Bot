@@ -604,39 +604,58 @@ async def cancel(session: AsyncSession, user: User, event_id: int) -> Event:
         actor_user_id=user.id,
         diff={"status": [before, EventStatus.cancelled]},
     )
+    await _notify_cancelled(session, event, link=True)
+    await session.commit()
+    return event
+
+
+async def _notify_cancelled(session: AsyncSession, event: Event, *, link: bool) -> None:
+    """Всем, кто нажал «Пойду», — «Событие отменено». link=False — события больше нет."""
     saved_users = await session.scalars(
         select(User)
         .join(SavedSession, SavedSession.user_id == User.id)
         .join(EventSession, EventSession.id == SavedSession.session_id)
         .where(EventSession.event_id == event.id, User.bot_started_at.is_not(None))
     )
+    payload: dict[str, Any] = {"title": event.title}
+    if link:
+        payload["event_id"] = event.id
     for recipient in saved_users:
         await notifications_service.schedule(
             session,
             recipient,
             kind="cancelled",
-            payload={"event_id": event.id, "title": event.title},
+            payload=payload,
             dedup_key=f"cancelled:{recipient.id}:{event.id}",
             scheduled_at=utcnow(),
         )
-    await session.commit()
-    return event
 
 
-async def remove(session: AsyncSession, user: User, event_id: int) -> None:
+# Удаление видимого события сначала сообщает тем, кто собирался прийти.
+_VISIBLE = (EventStatus.published, EventStatus.hidden, EventStatus.pending)
+
+
+async def remove(
+    session: AsyncSession, user: User, event_id: int, notifier: Notifier | None = None
+) -> None:
+    """Автор (или редактор организации) удаляет своё событие в любом статусе."""
     event = await _require_manage(session, user, event_id, lock=True)
-    if event.status != EventStatus.draft:
-        raise AppError("bad_transition", "Удалить можно только черновик — иначе отмени", 409)
+    before = event.status
     await audit.record(
         session,
         action="event.delete",
         entity_type="event",
         entity_id=event.id,
         actor_user_id=user.id,
-        diff={"title": event.title},
+        diff={"title": event.title, "status": str(before)},
     )
+    if before in _VISIBLE:
+        await _notify_cancelled(session, event, link=False)
     await session.execute(delete(Event).where(Event.id == event.id))
     await session.commit()
+    # Заявка ждала модератора — убираем кнопки решения в его сообщениях.
+    if before == EventStatus.pending and notifier is not None:
+        await notifier.moderation_closed("e", event_id)
 
 
 # --- Представления --------------------------------------------------------------------

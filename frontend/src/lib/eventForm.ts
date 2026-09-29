@@ -314,18 +314,6 @@ export function stepOfField(field: string): number {
   return STEP.main;
 }
 
-/** Что распознал разбор анонса (ai_fields) — подписи для подсветки. */
-export const PARSED_LABELS: Record<string, string> = {
-  title: "название",
-  category: "категория",
-  price_type: "цена",
-  pushkin_card: "Пушкинская карта",
-  ticket_url: "ссылка на билеты",
-  contacts: "контакты",
-  sessions: "дата и время",
-  venue_id: "площадка",
-};
-
 /** Превью «как в ленте»: EventManage → EventCard. */
 export function manageToCard(event: EventManage): EventCard {
   const sessions = event.sessions

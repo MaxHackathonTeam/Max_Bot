@@ -4,7 +4,7 @@ import { api } from "./client";
 import type { CheckViolation, EventManage } from "./organizer";
 
 export type QueueFilter = "new" | "returned" | "all";
-export type EventAction = "approve" | "reject" | "return";
+export type EventAction = "approve" | "reject" | "return" | "hide";
 
 export interface QueueEvent {
   id: number;

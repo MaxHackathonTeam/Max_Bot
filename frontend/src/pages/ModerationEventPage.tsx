@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, CircleX, Trash, Undo2 } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleX, EyeOff, Trash, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { decideEvent, deleteAdminEvent, fetchAdminEvent, type AdminEventCard, type EventAction } from "../api/admin";
@@ -24,6 +24,7 @@ const DONE: Record<EventAction, string> = {
   approve: "Опубликовано — автору ушло уведомление",
   reject: "Отклонено — автор получит причину в боте",
   return: "Вернули на доработку — автор получит комментарий",
+  hide: "Снято с публикации — автору ушло уведомление",
 };
 
 /** Решение: причина обязательна для отказа и возврата (как в services/moderation.py). */
@@ -49,6 +50,7 @@ function Decision({ id, status }: { id: number; status: string | null }) {
       approve: ["pending", "hidden", "rejected"],
       reject: ["pending", "hidden", "published"],
       return: ["pending", "hidden"],
+      hide: ["pending", "published"],
     }[action].includes(status);
   const busy = (action: EventAction) => decide.isPending && decide.variables === action;
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -71,7 +73,7 @@ function Decision({ id, status }: { id: number; status: string | null }) {
           </Chip>
         ))}
       </div>
-      <Field label="Комментарий автору" hint="Для отказа и возврата нужен шаблон или комментарий.">
+      <Field label="Комментарий автору" hint="Для отказа и возврата нужен шаблон или комментарий; при снятии и удалении — по желанию.">
         {(p) => <Textarea {...p} rows={3} maxLength={900} value={comment} onChange={(e) => setComment(e.target.value)} />}
       </Field>
       <FormErrors error={decide.error ?? remove.error} />
@@ -102,6 +104,15 @@ function Decision({ id, status }: { id: number; status: string | null }) {
           onClick={() => decide.mutate("reject")}
         >
           Отклонить
+        </Button>
+        <Button
+          variant="secondary"
+          disabled={!can("hide") || decide.isPending}
+          loading={busy("hide")}
+          icon={<EyeOff size={18} aria-hidden />}
+          onClick={() => decide.mutate("hide")}
+        >
+          Снять с публикации
         </Button>
       </div>
       {confirmDelete ? (
