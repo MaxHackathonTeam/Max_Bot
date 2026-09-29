@@ -11,10 +11,18 @@ export function isMobileMax(platform: string | undefined): boolean {
   return platform !== undefined && MOBILE.has(platform);
 }
 
+/**
+ * Сайт открыт внутри MAX. Скрипт Bridge грузится и в обычном браузере, и window.WebApp там
+ * тоже есть, но без initData: openLink тогда молча ничего не делает.
+ */
+export function insideMax(): boolean {
+  return Boolean(getWebApp()?.initData);
+}
+
 /** Открыть внешнюю ссылку (карты, билеты). Вызывать только из onClick. */
 export function openExternal(url: string): void {
   const webApp = getWebApp();
-  if (webApp?.openLink) {
+  if (webApp?.initData && webApp.openLink) {
     try {
       webApp.openLink(url);
       return;

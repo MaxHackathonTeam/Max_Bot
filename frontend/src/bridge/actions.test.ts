@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  insideMax,
   isMobileMax,
   openExternal,
   shareContent,
@@ -32,9 +33,9 @@ describe("bridge actions", () => {
     );
   });
 
-  it("openExternal через Bridge, а без него — window.open", () => {
+  it("openExternal через Bridge в MAX, а без него — window.open", () => {
     const openLink = vi.fn();
-    setWebApp({ openLink });
+    setWebApp({ initData: "signed", openLink });
     openExternal("https://yandex.ru/maps/?pt=31,58&z=16");
     expect(openLink).toHaveBeenCalledWith(
       "https://yandex.ru/maps/?pt=31,58&z=16",
@@ -47,6 +48,22 @@ describe("bridge actions", () => {
       "_blank",
       "noopener,noreferrer",
     );
+  });
+
+  it("в браузере Bridge без initData не используется: openLink там ничего не делает", () => {
+    const openLink = vi.fn();
+    setWebApp({ openLink, platform: "web" });
+    expect(insideMax()).toBe(false);
+    openExternal("https://max.ru/bot?start=login_ABC234");
+    expect(openLink).not.toHaveBeenCalled();
+    expect(window.open).toHaveBeenCalledWith(
+      "https://max.ru/bot?start=login_ABC234",
+      "_blank",
+      "noopener,noreferrer",
+    );
+
+    setWebApp({ initData: "signed", openLink });
+    expect(insideMax()).toBe(true);
   });
 
   const target = {

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { isToken, pollWebCode, requestWebCode, type WebCode } from "../api/auth";
 import { ApiError } from "../api/client";
 import { useSession } from "../app/session";
-import { openExternal } from "../bridge/actions";
+import { insideMax, openExternal } from "../bridge/actions";
 import { Button } from "../ui/Button";
 import { buttonClass } from "../ui/classes";
 import { Spinner } from "../ui/Spinner";
@@ -132,7 +132,8 @@ export function MaxLogin({
               target="_blank"
               rel="noreferrer"
               onClick={(e) => {
-                // В MAX ссылку открывает Bridge, в браузере — обычная вкладка.
+                // В MAX ссылку открывает Bridge, в браузере — сама ссылка (новая вкладка).
+                if (!insideMax()) return;
                 e.preventDefault();
                 openExternal(state.code.deeplink);
               }}
