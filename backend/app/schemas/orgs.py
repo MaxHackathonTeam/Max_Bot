@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app.models.enums import OrgKind, OrgRole
+from app.schemas.events import LocalityBrief
 
 Inn = Annotated[str, StringConstraints(pattern=r"^(\d{10}|\d{12})$")]
 HttpsUrl = Annotated[
@@ -142,3 +143,39 @@ class VerificationOut(BaseModel):
     created_at: datetime
     last_attempt_at: datetime | None
     next_attempt_at: datetime | None = Field(description="Раньше этого повтор недоступен")
+
+
+# --- Открытый профиль и поиск организаций (без токена) ---
+
+
+class OrgPublic(BaseModel):
+    """Публичный профиль: без ИНН/ОГРН (ИНН ИП — ПДн, §11), телефона, почты и команды."""
+
+    id: int
+    name: str
+    kind: OrgKind
+    description: str | None = Field(description="«О нас» — кто это")
+    locality: LocalityBrief | None
+    address: str | None
+    website: str | None
+    vk_url: str | None
+    verified: bool
+    is_demo: bool
+    future_events: int = Field(description="Опубликованные события с будущими сеансами")
+    official_events: int = Field(description="Из них в ленте «Официальные»")
+    community_events: int = Field(description="Из них в ленте «От жителей»")
+
+
+class OrgSearchItem(BaseModel):
+    id: int
+    name: str
+    kind: OrgKind
+    locality: LocalityBrief | None
+    verified: bool
+    is_demo: bool
+    future_events: int
+
+
+class OrgSearchPage(BaseModel):
+    items: list[OrgSearchItem]
+    next_cursor: str | None

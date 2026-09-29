@@ -5,6 +5,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -23,6 +24,13 @@ class Organization(IdMixin, TimestampMixin, Base):
         enum_check("kind", OrgKind),
         enum_check("verification_status", VerificationStatus),
         enum_check("verification_method", VerificationMethod),
+        # Нечёткий поиск организаций по названию (pg_trgm, word_similarity).
+        Index(
+            "ix_organizations_name_trgm",
+            "name",
+            postgresql_using="gin",
+            postgresql_ops={"name": "gin_trgm_ops"},
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255))

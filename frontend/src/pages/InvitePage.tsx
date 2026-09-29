@@ -23,7 +23,7 @@ function Invite({ me, token }: { me: Me; token: string }) {
     onSuccess: (res) => {
       void client.invalidateQueries({ queryKey: ["orgs"] });
       toast.show("Ты в команде");
-      navigate(`/org/${res.org_id}`, { replace: true });
+      navigate(`/org/${res.org_id}?tab=team`, { replace: true });
     },
   });
 

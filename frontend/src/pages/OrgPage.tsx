@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, BadgeCheck, Building, Info, PencilLine, Plus } from "lucide-react";
+import { ArrowLeft, BadgeCheck, Building, Eye, Info, PencilLine, Plus } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { Me } from "../api/client";
@@ -28,6 +28,7 @@ import { ListRow } from "../ui/ListRow";
 import { Loading, Skeleton } from "../ui/Skeleton";
 import { Tabs } from "../ui/Tabs";
 import { useToast } from "../ui/toastContext";
+import { OrgPublicPage } from "./OrgPublicPage";
 import { ErrorBlock, ErrorScreen, LoadingScreen } from "./Status";
 
 const kindLabel = (kind: string) => ORG_KINDS.find((k) => k.value === kind)?.label ?? kind;
@@ -97,7 +98,7 @@ function Cabinet({ me }: { me: Me }) {
                   {orgs.data.map((o) => (
                     <ListRow
                       key={o.id}
-                      to={`/org/${o.id}`}
+                      to={`/org/${o.id}?tab=events`}
                       icon={o.verified ? <BadgeCheck size={18} aria-hidden /> : <Building size={18} aria-hidden />}
                       title={o.name}
                       subtitle={`${kindLabel(o.kind)} · ${o.verified ? "проверена" : "не проверена"}`}
@@ -186,9 +187,14 @@ function OrgCabinet({ id }: { id: number }) {
   return (
     <main className="page page--narrow">
       <div className="stack stack--loose">
-        <Link to="/org/0" className="text-link small">
-          <ArrowLeft size={14} aria-hidden /> Все организации
-        </Link>
+        <div className="row row--between row--wrap">
+          <Link to="/org/0" className="text-link small">
+            <ArrowLeft size={14} aria-hidden /> Мои организации
+          </Link>
+          <Link to={`/org/${id}`} className="text-link small">
+            <Eye size={14} aria-hidden /> Открытый профиль
+          </Link>
+        </div>
         <div className="page-head">
           <p className="eyebrow">{kindLabel(org.data.kind)}</p>
           <h1 className="h1">{org.data.name}</h1>
@@ -212,10 +218,15 @@ function OrgCabinet({ id }: { id: number }) {
   );
 }
 
-/** Кабинет организатора (§3.1 org_<id>): /org/0 — список, /org/<id> — организация. */
+/**
+ * /org/0 — кабинет организатора; /org/<id> — открытый профиль организации для всех (§3.1 org_<id>),
+ * /org/<id>?tab=… — управление для команды (вход через MAX).
+ */
 export function OrgPage() {
   const id = Number(useParams().id);
+  const [params] = useSearchParams();
   if (!Number.isInteger(id) || id < 0) return <ErrorScreen message="Организация не найдена." />;
+  if (id > 0 && !params.has("tab")) return <OrgPublicPage key={id} id={id} />;
   return (
     <RequireMax
       title="Кабинет организатора"

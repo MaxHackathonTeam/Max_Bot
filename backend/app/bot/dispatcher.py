@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import structlog
 
-from app.bot import add_event, fsm, keyboards, render, texts
+from app.bot import add_event, fsm, keyboards, orgs, render, texts
 from app.bot.core import Answer, BotContext, event_path
 from app.bot.core import Target as _Target
 from app.bot.core import get_user as _user
@@ -222,6 +222,7 @@ async def _send_pages(
             tier=_TIER_CODE[tier],
             next_cursor=page.next_cursor,
             offset=offset,
+            orgs=orgs.feed_orgs(page.items),
         )
         await _send(ctx, target, text, keyboard)
 
@@ -783,6 +784,8 @@ async def _on_message(ctx: BotContext, target: _Target, update: dict[str, Any]) 
     state = await ctx.states.get(target.user_id)
     if add_event.is_active(state):
         await add_event.on_message(ctx, target, state, text, add_event.image_url_of(body))
+    elif orgs.is_active(state):
+        await orgs.on_message(ctx, target, text)
     elif not text:
         await _send_menu(ctx, target, texts.UNKNOWN_TEXT)
     elif state.startswith(fsm.ADMIN_REASON + ":"):
@@ -833,6 +836,8 @@ async def _on_command(ctx: BotContext, target: _Target, command: str, arg: str) 
         await _send(ctx, target, texts.DELETE_CONFIRM, keyboards.delete_confirm())
     elif command == "/org":
         await _send_org_menu(ctx, target)
+    elif command == "/orgs":
+        await orgs.begin_search(ctx, target, arg or None)
     elif command == "/queue":
         await _send_queue(ctx, target)
     else:
@@ -891,6 +896,8 @@ async def _on_callback(
         await _send_my(ctx, target)
     elif prefix == keyboards.P_ADD:
         await add_event.on_callback(ctx, target, args, answer)
+    elif prefix == keyboards.P_ORG_PUBLIC:
+        await orgs.on_callback(ctx, target, args, answer)
     elif payload in keyboards.FEED_BY_MENU:
         await answer()
         await _send_feed(ctx, target, keyboards.FEED_BY_MENU[payload])
