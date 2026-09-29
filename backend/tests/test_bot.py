@@ -224,8 +224,9 @@ async def test_error_handler_reports_to_user(bot: BotContext, max_api: respx.Moc
     error = _sent(max_api)[-1]
     assert error["text"] == texts.ERROR
     assert _buttons(error)[0]["payload"] == keyboards.CB_MENU
-    # callback уже был отвечен до ошибки — повторно не отвечаем.
-    assert max_api["answer"].call_count == 1
+    # Нажатие уже обработано (без тоста — пустой POST /answers MAX не принимает), об ошибке —
+    # сообщением, тост с ошибкой не дублируем.
+    assert max_api["answer"].call_count == 0
 
 
 # --- Онбординг, подборки, «Пойду», настройки (этап 2) ---------------------------------
