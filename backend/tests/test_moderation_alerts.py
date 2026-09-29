@@ -45,6 +45,7 @@ def settings(db_settings: Settings) -> Settings:
         update={
             "admin_max_user_ids": [ADMIN, ADMIN_2],
             "public_base_url": "https://afisha.test",
+            "max_bot_username": "afisha_bot",
         }
     )
 
@@ -176,9 +177,16 @@ async def test_broadcast_to_all_moderators(
         {"type": "callback", "text": texts.MOD_APPROVE, "payload": f"mod:e:{event.id}:approve"},
         {"type": "callback", "text": texts.MOD_REJECT, "payload": f"mod:e:{event.id}:reject"},
         {
-            "type": "link",
-            "text": texts.MOD_OPEN_SITE,
-            "url": f"https://afisha.test/moderation/{event.id}",
+            "type": "callback",
+            "text": texts.ADMIN_DELETE_BUTTON,
+            "payload": f"adm:e:{event.id}:delete",
+        },
+        # Из бота — только мини-приложение, не сайт.
+        {
+            "type": "open_app",
+            "text": texts.MOD_OPEN_APP,
+            "web_app": "afisha_bot",
+            "payload": f"mod_{event.id}",
         },
     ]
 
@@ -207,7 +215,7 @@ async def test_event_time_in_locality_timezone(bot: BotContext, db_session: Asyn
         select(EventSession.starts_at).where(EventSession.event_id == event.id)
     )
     assert starts_at is not None
-    card = await bot_notify.moderation_card(bot.db, bot.settings, "e", event.id)
+    card = await bot_notify.moderation_card(bot.db, "e", event.id)
     assert card is not None
     assert render.when(starts_at, "Asia/Yekaterinburg") in card.text
 
@@ -256,7 +264,12 @@ async def test_org_verification_goes_to_moderators(
     for part in ("Дом культуры", "7707083893", "Орлово", "+79990001122", "Пётр"):
         assert part in message["text"]
     assert _buttons(message)[0]["payload"] == f"mod:v:{request.id}:approve"
-    assert _buttons(message)[-1]["url"] == "https://afisha.test/moderation"
+    assert _buttons(message)[-1] == {
+        "type": "open_app",
+        "text": texts.MOD_OPEN_APP,
+        "web_app": "afisha_bot",
+        "payload": "mod_0",
+    }
 
     # Одобрить → заявка verified, владельцу уведомление, решение в audit_log.
     await handle_update(bot, _callback(ADMIN, f"mod:v:{request.id}:approve"))
@@ -381,12 +394,13 @@ async def test_close_edits_all_moderator_messages(
     assert sorted(c.request.url.params["message_id"] for c in edits) == ["mid.1", "mid.2"]
     body = json.loads(edits[0].request.content)
     assert body["text"].endswith("Решено: одобрено")
-    # Кнопки решения убраны, ссылка на карточку осталась.
+    # Кнопки решения убраны, карточка в мини-приложении осталась.
     assert _buttons(body) == [
         {
-            "type": "link",
-            "text": texts.MOD_OPEN_SITE,
-            "url": f"https://afisha.test/moderation/{event.id}",
+            "type": "open_app",
+            "text": texts.MOD_OPEN_APP,
+            "web_app": "afisha_bot",
+            "payload": f"mod_{event.id}",
         }
     ]
     assert bot_notify.moderation_key("e", event.id) not in bot.redis.hashes
@@ -401,3 +415,118 @@ async def test_whoami_for_moderator(bot: BotContext, max_api: respx.MockRouter) 
     reply = _sent(max_api)[-1]["text"]
     assert str(ADMIN) in reply and texts.MYID_ADMIN in reply
     assert keyboards.P_MOD == "mod"
+
+
+async def test_clean_event_is_not_auto_published(db_session: AsyncSession) -> None:
+    # Правила ничего не нашли — всё равно ждём решения человека (§6).
+    event, _ = await _pending_event(db_session)
+    event.moderation_reason = None
+    await db_session.commit()
+    notifier = MemoryNotifier()
+    status = await moderation_service.moderate_event(db_session, event.id, notifier=notifier)
+    assert status == "pending"
+    await db_session.refresh(event)
+    assert event.status == "pending"
+    assert notifier.moderation == [("alert", "e", event.id)]
+
+
+async def test_official_event_also_waits_for_moderator(db_session: AsyncSession) -> None:
+    event, _ = await _pending_event(db_session)
+    event.trust_tier = TrustTier.official
+    await db_session.commit()
+    notifier = MemoryNotifier()
+    assert await moderation_service.moderate_event(db_session, event.id, notifier=notifier) == (
+        "pending"
+    )
+    assert notifier.moderation == [("alert", "e", event.id)]
+
+
+async def test_admin_delete_audits_and_notifies(db_session: AsyncSession) -> None:
+    from app.core.errors import AppError
+    from app.models.events import EventSession
+
+    event, author = await _pending_event(db_session)
+    event_id = event.id
+    admin = User(max_user_id=random_max_id(), first_name="Админ", channel="max")
+    db_session.add(admin)
+    await db_session.commit()
+    admin_id, author_id = admin.id, author.id
+    notifier = MemoryNotifier()
+    await moderation_service.admin_delete(db_session, admin, event_id, "Дубль", notifier)
+
+    db_session.expire_all()
+    assert await db_session.get(Event, event_id) is None
+    # Сеансы ушли каскадом.
+    assert (
+        await db_session.scalar(select(EventSession.id).where(EventSession.event_id == event_id))
+        is None
+    )
+    audit = (
+        await db_session.scalars(
+            select(AuditLog).where(
+                AuditLog.entity_type == "event",
+                AuditLog.entity_id == event_id,
+                AuditLog.action == "event.admin_delete",
+            )
+        )
+    ).all()
+    assert len(audit) == 1
+    assert audit[0].actor_type == "admin" and audit[0].actor_user_id == admin_id
+    assert audit[0].diff is not None and audit[0].diff["reason"] == "Дубль"
+    assert (author_id, texts.EVENT_DELETED_BY_ADMIN.format(title="Ярмарка", reason="Дубль")) in [
+        (u, t) for u, t, _ in notifier.sent
+    ]
+    assert ("closed", "e", event_id) in notifier.moderation
+
+    with pytest.raises(AppError) as exc:
+        await moderation_service.admin_delete(db_session, admin, event_id, None, notifier)
+    assert exc.value.status_code == 404
+
+
+async def test_bot_delete_asks_confirmation(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    event, _ = await _pending_event(db_session)
+    event_id = event.id
+    await handle_update(bot, _callback(ADMIN, f"adm:e:{event_id}:delete"))
+    ask = _sent(max_api)[-1]
+    assert ask["text"] == texts.ADMIN_DELETE_ASK.format(id=event_id, title="Ярмарка")
+    assert [b["payload"] for b in _buttons(ask)] == [
+        f"adm:e:{event_id}:delyes",
+        f"adm:e:{event_id}:delno",
+    ]
+    # Отмена — событие на месте.
+    await handle_update(bot, _callback(ADMIN, f"adm:e:{event_id}:delno"))
+    assert _answers(max_api)[-1]["notification"] == texts.ADMIN_DELETE_CANCELLED
+    assert await db_session.get(Event, event_id) is not None
+
+    await handle_update(bot, _callback(ADMIN, f"adm:e:{event_id}:delyes"))
+    assert _sent(max_api)[-1]["text"] == texts.ADMIN_DELETE_DONE.format(id=event_id)
+    db_session.expire_all()
+    assert await db_session.get(Event, event_id) is None
+
+
+async def test_del_command(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    event, _ = await _pending_event(db_session)
+    await handle_update(bot, _text(random_max_id(), f"/del {event.id}"))
+    assert _sent(max_api)[-1]["text"] == texts.ADMIN_ONLY
+    await handle_update(bot, _text(ADMIN, "/del abc"))
+    assert _sent(max_api)[-1]["text"] == texts.ADMIN_DELETE_USAGE
+    await handle_update(bot, _text(ADMIN, f"/del #{event.id}"))
+    assert _sent(max_api)[-1]["text"] == texts.ADMIN_DELETE_ASK.format(id=event.id, title="Ярмарка")
+
+
+async def test_close_after_delete(
+    bot: BotContext, max_api: respx.MockRouter, db_session: AsyncSession
+) -> None:
+    event, _ = await _pending_event(db_session)
+    event_id = event.id
+    await bot.redis.hset(bot_notify.moderation_key("e", event_id), str(ADMIN), "mid.1")
+    await db_session.delete(event)
+    await db_session.commit()
+    assert await worker.close_moderation({"bot": bot}, "e", event_id) == 0
+    body = json.loads(max_api["edit"].calls.last.request.content)
+    assert body["text"].endswith(texts.MOD_VERDICTS["deleted"])
+    assert body["attachments"] == []

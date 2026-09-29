@@ -11,7 +11,6 @@ import {
   MapPin,
   MonitorPlay,
   Plus,
-  Rocket,
   Search,
   Send,
   Sparkles,
@@ -477,7 +476,7 @@ function StepReview({ event, onFix }: { event: EventManage; onFix: (step: number
     onSuccess: (e) => {
       set(e);
       if (e.status === "rejected") toast.show(`Правила отклонили: ${e.moderation_reason ?? "см. замечания"}`, "error");
-      else toast.show(official ? "Опубликовано" : "Отправили на проверку — итог придёт в бот");
+      else toast.show("Отправили на проверку — итог придёт в бот");
     },
   });
   const cancel = useMutation({
@@ -508,7 +507,7 @@ function StepReview({ event, onFix }: { event: EventManage; onFix: (step: number
       {canSubmit && (
         <p className="small muted">
           {official
-            ? "Событие сразу появится в «Официальных» с отметкой «Организатор проверен»."
+            ? "Событие проверит модерация, после этого оно появится в «Официальных» с отметкой «Организатор проверен». Результат пришлём в бот."
             : "Событие проверит модерация, после этого оно появится в «От жителей». Результат пришлём в бот."}
         </p>
       )}
@@ -519,10 +518,10 @@ function StepReview({ event, onFix }: { event: EventManage; onFix: (step: number
           size="lg"
           block
           loading={submit.isPending}
-          icon={official ? <Rocket size={18} aria-hidden /> : <Send size={18} aria-hidden />}
+          icon={<Send size={18} aria-hidden />}
           onClick={() => submit.mutate()}
         >
-          {official ? "Опубликовать" : "Отправить на проверку"}
+          Отправить на проверку
         </Button>
       )}
       {event.status === "published" && (

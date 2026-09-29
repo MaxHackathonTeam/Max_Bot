@@ -464,7 +464,7 @@ async def test_save_without_consent_asks_consent(
 
     await handle_update(bot, _callback(random_max_id(), f"save:{event.id}:{session_id}"))
     assert _answers(max_api)[-1]["notification"].startswith("Чтобы сохранять события")
-    assert _buttons(_sent(max_api)[-1])[0]["payload"] == keyboards.CB_CONSENT_ACCEPT
+    assert _add_payloads(_sent(max_api)[-1]) == [keyboards.CB_CONSENT_ACCEPT]
 
 
 async def test_settings_radius_toggles_and_delete(
@@ -609,13 +609,11 @@ async def test_add_wizard_step_by_step(
     user_id = await _ready_user(bot, db_session, locality)
     title = _unique("Вечер песни ")
 
+    # Только по шагам: /add сразу спрашивает название (анонс целиком не разбираем).
     await handle_update(bot, _text(user_id, "/add"))
     start = _sent(max_api)[-1]
-    assert start["text"] == texts.ADD_START
-    assert _add_payloads(start) == [keyboards.CB_ADD_STEPS, keyboards.CB_ADD_CANCEL]
-
-    await handle_update(bot, _callback(user_id, keyboards.CB_ADD_STEPS))
-    assert _sent(max_api)[-1]["text"] == texts.ADD_ASK["title"]
+    assert start["text"] == f"{texts.ADD_START}\n\n{texts.ADD_ASK['title']}"
+    assert keyboards.CB_ADD_CANCEL in _add_payloads(start)
     await handle_update(bot, _text(user_id, title))
     assert _sent(max_api)[-1]["text"] == texts.ADD_ASK["when"]
     # Непонятная дата — переспрашиваем тот же шаг.
@@ -649,6 +647,10 @@ async def test_add_wizard_step_by_step(
 
     done = _sent(max_api)[-1]
     assert done["text"] == texts.ADD_SENT_PENDING.format(title=title)
+    # Из бота — только мини-приложение: ни одной кнопки-ссылки на сайт.
+    for message in _sent(max_api):
+        if message.get("attachments"):
+            assert all(b["type"] != "link" for b in _buttons(message))
     assert await bot.states.get(user_id) == "idle"
     event = await db_session.scalar(
         select(Event).where(Event.title == title).execution_options(populate_existing=True)
@@ -676,14 +678,15 @@ async def test_add_wizard_cancel_and_announcement(
     user_id = await _ready_user(bot, db_session, locality)
     title = _unique("Субботник ")
 
-    # Анонс целиком: правила заполняют поля, дальше — первый незаполненный шаг.
+    # Текст, похожий на анонс, мастер не запускает — это обычный поиск.
     announce = f"{title}\n25.12 в 11:00 у клуба. Вход свободный, приходите всей семьёй!"
-    await handle_update(bot, _text(user_id, "/add"))
     await handle_update(bot, _text(user_id, announce))
-    parsed, step = _sent(max_api)[-2:]
-    assert parsed["text"] == texts.ADD_PARSED
-    assert await bot.states.get(user_id) != "idle"
-    assert keyboards.CB_ADD_CANCEL in _add_payloads(step)
+    assert not (await bot.states.get(user_id) or "").startswith("add.")
+
+    # В мастере анонс — это просто ответ на шаг «Название».
+    await handle_update(bot, _text(user_id, "/add"))
+    assert (await bot.states.get(user_id) or "").startswith("add.")
+    assert keyboards.CB_ADD_CANCEL in _add_payloads(_sent(max_api)[-1])
 
     await handle_update(bot, _callback(user_id, keyboards.CB_ADD_CANCEL))
     assert _sent(max_api)[-1]["text"] == texts.ADD_CANCELLED
@@ -699,7 +702,7 @@ async def test_add_requires_consent(bot: BotContext, max_api: respx.MockRouter) 
     await handle_update(bot, _callback(random_max_id(), keyboards.CB_ADD))
     ask = _sent(max_api)[-1]
     assert ask["text"].startswith(texts.ADD_NEED_CONSENT)
-    assert _buttons(ask)[0]["payload"] == keyboards.CB_CONSENT_ACCEPT
+    assert _add_payloads(ask) == [keyboards.CB_CONSENT_ACCEPT]
 
 
 async def test_queued_messages_dedup_and_guests_skipped(

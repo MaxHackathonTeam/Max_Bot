@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, CircleX, Undo2 } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleX, Trash, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { decideEvent, fetchAdminEvent, type AdminEventCard, type EventAction } from "../api/admin";
+import { decideEvent, deleteAdminEvent, fetchAdminEvent, type AdminEventCard, type EventAction } from "../api/admin";
 import { STATUS_LABELS } from "../api/organizer";
 import { EventCardView } from "../components/EventCardView";
 import { FormErrors } from "../components/FormErrors";
@@ -51,6 +51,16 @@ function Decision({ id, status }: { id: number; status: string | null }) {
       return: ["pending", "hidden"],
     }[action].includes(status);
   const busy = (action: EventAction) => decide.isPending && decide.variables === action;
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const remove = useMutation({
+    mutationFn: () => deleteAdminEvent(id, reason),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["admin-queue"] });
+      client.removeQueries({ queryKey: ["admin-event", id] });
+      toast.show("Событие удалено — автору ушло уведомление", "success");
+      navigate("/moderation");
+    },
+  });
   return (
     <Card className="stack">
       <h2 className="h2">Решение</h2>
@@ -64,7 +74,7 @@ function Decision({ id, status }: { id: number; status: string | null }) {
       <Field label="Комментарий автору" hint="Для отказа и возврата нужен шаблон или комментарий.">
         {(p) => <Textarea {...p} rows={3} maxLength={900} value={comment} onChange={(e) => setComment(e.target.value)} />}
       </Field>
-      <FormErrors error={decide.error} />
+      <FormErrors error={decide.error ?? remove.error} />
       <div className="row row--wrap">
         <Button
           variant="primary"
@@ -94,6 +104,36 @@ function Decision({ id, status }: { id: number; status: string | null }) {
           Отклонить
         </Button>
       </div>
+      {confirmDelete ? (
+        <div className="stack stack--tight">
+          <p className="notice notice--danger small">
+            <CircleAlert size={16} aria-hidden />
+            <span>Удалить событие насовсем? Его не будет ни в ленте, ни у автора. Отменить нельзя.</span>
+          </p>
+          <div className="row row--wrap">
+            <Button
+              variant="danger"
+              loading={remove.isPending}
+              icon={<Trash size={16} aria-hidden />}
+              onClick={() => remove.mutate()}
+            >
+              Да, удалить
+            </Button>
+            <Button variant="ghost" disabled={remove.isPending} onClick={() => setConfirmDelete(false)}>
+              Отмена
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          variant="ghost"
+          disabled={decide.isPending}
+          icon={<Trash size={16} aria-hidden />}
+          onClick={() => setConfirmDelete(true)}
+        >
+          Удалить событие
+        </Button>
+      )}
     </Card>
   );
 }

@@ -7,7 +7,7 @@ from typing import Any, cast
 import structlog
 
 from app.bot import add_event, fsm, keyboards, orgs, render, texts
-from app.bot.core import Answer, BotContext, event_path
+from app.bot.core import Answer, BotContext, event_deeplink
 from app.bot.core import Target as _Target
 from app.bot.core import get_user as _user
 from app.bot.core import message as _message
@@ -16,6 +16,7 @@ from app.bot.core import send as _send
 from app.bot.core import target_of as _target_of
 from app.core.errors import AppError
 from app.models.enums import ConsentDoc
+from app.models.events import Event
 from app.models.users import User
 from app.schemas.events import EventCard, EventPage
 from app.schemas.users import MeUpdate
@@ -63,9 +64,6 @@ LOCALITY_OPTIONS = 5
 NEAREST_PAGE = 3
 TIERS = ("official", "community")
 _TIER_CODE = {v: k for k, v in keyboards.TIER_CODES.items()}
-# Похоже на анонс: дата «25.10» или время «18:00» в длинном тексте.
-_ANNOUNCE_RE = re.compile(r"\b\d{1,2}[./-]\d{1,2}\b|\b\d{1,2}:\d{2}\b")
-ANNOUNCE_MIN = 40
 
 
 async def _place_name(ctx: BotContext, target: _Target) -> str | None:
@@ -83,7 +81,7 @@ async def _send_menu(ctx: BotContext, target: _Target, text: str = texts.MENU) -
 
 
 async def _send_consent(ctx: BotContext, target: _Target) -> None:
-    await _send(ctx, target, ctx.consent_text(), keyboards.consent())
+    await _send(ctx, target, texts.CONSENT, keyboards.consent(await ctx.web_app_name()))
 
 
 # --- Онбординг: населённый пункт и интересы ------------------------------------------
@@ -192,10 +190,7 @@ FeedPage = tuple[str, EventPage]
 
 
 def _feed_items(ctx: BotContext, cards: list[EventCard]) -> list[keyboards.FeedItem]:
-    return [
-        (c.id, c.next_session.id if c.next_session else None, ctx.site_url(f"/event/{c.id}"))
-        for c in cards
-    ]
+    return [(c.id, c.next_session.id if c.next_session else None) for c in cards]
 
 
 async def _send_pages(
@@ -409,9 +404,12 @@ async def _send_my(ctx: BotContext, target: _Target) -> None:
     if not items:
         await _send(ctx, target, texts.MY_EMPTY, keyboards.my_events(None, []))
         return
-    links = [(i.id, ctx.site_url(event_path(i.id, i.status))) for i in items]
+    payloads = [event_deeplink(i.id, i.status) for i in items]
     await _send(
-        ctx, target, render.my_events(items), keyboards.my_events(await ctx.web_app_name(), links)
+        ctx,
+        target,
+        render.my_events(items),
+        keyboards.my_events(await ctx.web_app_name(), payloads),
     )
 
 
@@ -619,7 +617,9 @@ async def _admin_apply(
     async with ctx.db() as session:
         admin = await _user(session, target)
         try:
-            if kind == "e":
+            if kind == "e" and action == "delete":
+                await moderation_service.admin_delete(session, admin, entity_id, reason, notifier)
+            elif kind == "e":
                 await moderation_service.admin_decide(
                     session, admin, entity_id, action, reason, notifier
                 )
@@ -645,6 +645,19 @@ async def _on_admin_callback(
     kind = args[0]
     entity_id = int(args[1])
     action = args[2] if len(args) == 3 else "revoke"
+    if action == "delete":
+        await answer()
+        await _ask_admin_delete(ctx, target, entity_id)
+        return
+    if action == "delno":
+        await answer(texts.ADMIN_DELETE_CANCELLED)
+        return
+    if action == "delyes":
+        toast = await _admin_apply(ctx, target, kind, entity_id, "delete", None)
+        await answer(toast)
+        if toast == texts.QUEUE_DONE_TOAST:
+            await _send(ctx, target, texts.ADMIN_DELETE_DONE.format(id=entity_id))
+        return
     if action == "reject":
         await answer()
         await ctx.states.set(target.user_id, f"{fsm.ADMIN_REASON}:{kind}:{entity_id}")
@@ -735,8 +748,33 @@ def _parse_mod(args: list[str]) -> bool:
     )
 
 
+_ADMIN_EVENT_ACTIONS = ("approve", "reject", "hide", "delete", "delyes", "delno")
+
+
+async def _ask_admin_delete(ctx: BotContext, target: _Target, event_id: int) -> None:
+    """Удаление афиши — только после подтверждения: кнопка «Удалить» или /del <номер>."""
+    async with ctx.db() as session:
+        event = await session.get(Event, event_id)
+    if event is None:
+        await _send(ctx, target, texts.ADMIN_DELETE_NOT_FOUND.format(id=event_id))
+        return
+    text = texts.ADMIN_DELETE_ASK.format(id=event.id, title=event.title)
+    await _send(ctx, target, text, keyboards.admin_delete_confirm(event.id))
+
+
+async def _on_del_command(ctx: BotContext, target: _Target, arg: str) -> None:
+    if not _is_admin(ctx, target):
+        await _send(ctx, target, texts.ADMIN_ONLY, keyboards.menu_button())
+        return
+    raw = arg.strip().lstrip("#")
+    if not raw.isdigit() or len(raw) > 18:
+        await _send(ctx, target, texts.ADMIN_DELETE_USAGE)
+        return
+    await _ask_admin_delete(ctx, target, int(raw))
+
+
 def _parse_admin(args: list[str]) -> bool:
-    if len(args) == 3 and args[0] == "e" and args[2] in ("approve", "reject", "hide"):
+    if len(args) == 3 and args[0] == "e" and args[2] in _ADMIN_EVENT_ACTIONS:
         return args[1].isdigit()
     if len(args) == 3 and args[0] == "v" and args[2] in ("approve", "reject"):
         return args[1].isdigit()
@@ -852,7 +890,6 @@ async def _on_message(ctx: BotContext, target: _Target, update: dict[str, Any]) 
         await _on_contact(ctx, target, contact)
         return
     text = (body.get("text") or "").strip()
-    forwarded = isinstance((update.get("message") or {}).get("link"), dict)
     # Пересланный пост может прийти без собственного текста: MAX кладёт его в link.body.
     if not text:
         linked = (update.get("message") or {}).get("link") or {}
@@ -874,10 +911,6 @@ async def _on_message(ctx: BotContext, target: _Target, update: dict[str, Any]) 
         await _on_admin_reason(ctx, target, state, text)
     elif state in (fsm.ONBOARDING_LOCALITY, fsm.SETTINGS_LOCALITY, fsm.CITY_LOCALITY):
         await _search_locality(ctx, target, text)
-    elif forwarded or (len(text) >= ANNOUNCE_MIN and _ANNOUNCE_RE.search(text)):
-        # Похоже на анонс — мастер разберёт его и покажет превью.
-        await ctx.states.set(target.user_id, fsm.IDLE)
-        await add_event.begin(ctx, target, text)
     else:
         explicit = state == fsm.FIND_QUERY
         if explicit:
@@ -901,7 +934,7 @@ async def _on_command(ctx: BotContext, target: _Target, command: str, arg: str) 
         else:
             await _send_find(ctx, target)
     elif command == "/add":
-        await add_event.begin(ctx, target, arg or None)
+        await add_event.begin(ctx, target)
     elif command == "/city":
         await _ask_locality(ctx, target, fsm.CITY_LOCALITY)
     elif command == "/my":
@@ -920,6 +953,8 @@ async def _on_command(ctx: BotContext, target: _Target, command: str, arg: str) 
         await _send_org_menu(ctx, target)
     elif command == "/orgs":
         await orgs.begin_search(ctx, target, arg or None)
+    elif command == "/del":
+        await _on_del_command(ctx, target, arg)
     elif command == "/queue":
         await _send_queue(ctx, target)
     else:

@@ -46,9 +46,9 @@ P_FEED = "feed"  # feed:<preset>:<radius>:<o|c>:<offset>[:<cursor>]
 P_SAVE = "save"  # save:<event_id>:<session_id>
 P_UNSAVE = "unsave"  # unsave:<event_id>:<session_id>
 P_RADIUS = "rad"  # rad:<km>
-P_ADMIN = (
-    "adm"  # adm:e:<event_id>:<approve|reject|hide> | adm:v:<id>:<approve|reject> | adm:r:<org>
-)
+# adm:e:<event_id>:<approve|reject|hide|delete|delyes|delno> | adm:v:<id>:<approve|reject>
+# | adm:r:<org>
+P_ADMIN = "adm"
 P_WEB_LOGIN = "weblogin"  # weblogin:<code> | weblogin:no:<code>
 P_ADD = "add"  # мастер «Добавить афишу», см. app.bot.add_event
 
@@ -86,8 +86,18 @@ def find_menu() -> dict[str, Any]:
     )
 
 
-def consent() -> dict[str, Any]:
-    return kb.inline_keyboard([[kb.callback(texts.CONSENT_ACCEPT_BUTTON, CB_CONSENT_ACCEPT)]])
+def consent(web_app: str | None = None) -> dict[str, Any]:
+    """Документы — в мини-приложении (диплинки legal_terms / legal_privacy)."""
+    rows: list[list[kb.Button]] = []
+    if web_app:
+        rows.append(
+            [
+                kb.open_app(texts.CONSENT_TERMS_BUTTON, web_app, "legal_terms"),
+                kb.open_app(texts.CONSENT_PRIVACY_BUTTON, web_app, "legal_privacy"),
+            ]
+        )
+    rows.append([kb.callback(texts.CONSENT_ACCEPT_BUTTON, CB_CONSENT_ACCEPT)])
+    return kb.inline_keyboard(rows)
 
 
 def menu_button() -> dict[str, Any]:
@@ -130,17 +140,14 @@ def feed_payload(
     return f"{P_FEED}:{preset}:{radius}:{tier}:{offset}" + (f":{cursor}" if cursor else "")
 
 
-def _details(web_app: str | None, n: int, event_id: int, url: str | None) -> kb.Button | None:
-    """«Подробнее на сайте»: ссылка, если сайт на https, иначе карточка в мини-приложении."""
-    label = texts.FEED_DETAILS_BUTTON.format(n=n)
-    if url:
-        return kb.link(label, url)
+def _details(web_app: str | None, n: int, event_id: int) -> kb.Button | None:
+    """«Подробнее»: карточка в мини-приложении (из бота на сайт не ведём)."""
     if web_app:
-        return kb.open_app(label, web_app, f"ev_{event_id}")
+        return kb.open_app(texts.FEED_DETAILS_BUTTON.format(n=n), web_app, f"ev_{event_id}")
     return None
 
 
-FeedItem = tuple[int, int | None, str | None]  # event_id, session_id, ссылка на сайт
+FeedItem = tuple[int, int | None]  # event_id, session_id
 
 
 def _feed_rows(
@@ -150,9 +157,9 @@ def _feed_rows(
     orgs: Mapping[int, int] | None = None,
 ) -> list[list[kb.Button]]:
     rows: list[list[kb.Button]] = []
-    for n, (event_id, session_id, url) in enumerate(items, start=offset + 1):
+    for n, (event_id, session_id) in enumerate(items, start=offset + 1):
         row: list[kb.Button] = []
-        details = _details(web_app, n, event_id, url)
+        details = _details(web_app, n, event_id)
         if details is not None:
             row.append(details)
         if session_id is not None:
@@ -175,7 +182,7 @@ def feed(
     offset: int = 0,
     orgs: Mapping[int, int] | None = None,
 ) -> dict[str, Any]:
-    """Строка на событие: [№ Подробнее на сайте] [⭐ Пойду] [🏛 Организатор]; внизу «Ещё» и «Меню».
+    """Строка на событие: [№ Подробнее] [⭐ Пойду] [🏛 Организатор]; внизу «Ещё» и «Меню».
 
     orgs — event_id → organization_id для кнопки «Об организаторе».
     """
@@ -285,13 +292,27 @@ def queue_event(web_app: str | None, event_id: int, org_id: int | None) -> dict[
             kb.callback(texts.QUEUE_APPROVE_BUTTON, f"{P_ADMIN}:e:{event_id}:approve"),
             kb.callback(texts.QUEUE_REJECT_BUTTON, f"{P_ADMIN}:e:{event_id}:reject"),
         ],
-        [kb.callback(texts.QUEUE_HIDE_BUTTON, f"{P_ADMIN}:e:{event_id}:hide")],
+        [
+            kb.callback(texts.QUEUE_HIDE_BUTTON, f"{P_ADMIN}:e:{event_id}:hide"),
+            kb.callback(texts.ADMIN_DELETE_BUTTON, f"{P_ADMIN}:e:{event_id}:delete"),
+        ],
     ]
     if org_id is not None:
         rows.append([kb.callback(texts.QUEUE_REVOKE_BUTTON, f"{P_ADMIN}:r:{org_id}")])
     if web_app:
-        rows.append([kb.open_app(texts.QUEUE_OPEN_BUTTON, web_app, f"ev_{event_id}")])
+        rows.append([kb.open_app(texts.QUEUE_OPEN_BUTTON, web_app, f"mod_{event_id}")])
     return kb.inline_keyboard(rows)
+
+
+def admin_delete_confirm(event_id: int) -> dict[str, Any]:
+    return kb.inline_keyboard(
+        [
+            [
+                kb.callback(texts.ADMIN_DELETE_YES, f"{P_ADMIN}:e:{event_id}:delyes"),
+                kb.callback(texts.ADMIN_DELETE_NO, f"{P_ADMIN}:e:{event_id}:delno"),
+            ]
+        ]
+    )
 
 
 def queue_verification(request_id: int) -> dict[str, Any]:
@@ -320,36 +341,32 @@ def web_login_confirm(code: str) -> dict[str, Any]:
     )
 
 
-def my_events(web_app: str | None, items: Sequence[tuple[int, str | None]]) -> dict[str, Any]:
-    """items — (event_id, ссылка на сайт)."""
+def my_events(web_app: str | None, payloads: Sequence[str]) -> dict[str, Any]:
+    """payloads — диплинк мини-приложения на каждое событие (ev_<id> или draft_<id>)."""
     rows: list[list[kb.Button]] = []
     buttons: list[kb.Button] = []
-    for n, (event_id, url) in enumerate(items, start=1):
-        label = texts.MY_OPEN_BUTTON.format(n=n)
-        if url:
-            buttons.append(kb.link(label, url))
-        elif web_app:
-            buttons.append(kb.open_app(label, web_app, f"ev_{event_id}"))
+    if web_app:
+        buttons = [
+            kb.open_app(texts.MY_OPEN_BUTTON.format(n=n), web_app, payload)
+            for n, payload in enumerate(payloads, start=1)
+        ]
     rows += [buttons[i : i + 3] for i in range(0, len(buttons), 3)]
     rows.append([kb.callback(texts.MENU_ADD, CB_ADD), kb.callback(texts.MENU_BUTTON, CB_MENU)])
     return kb.inline_keyboard(rows)
 
 
-def link_and_menu(label: str, url: str | None, web_app: str | None, payload: str) -> dict[str, Any]:
+def app_and_menu(label: str, web_app: str | None, payload: str) -> dict[str, Any]:
     rows: list[list[kb.Button]] = []
-    if url:
-        rows.append([kb.link(label, url)])
-    elif web_app:
+    if web_app:
         rows.append([kb.open_app(label, web_app, payload)])
     rows.append([kb.callback(texts.MENU_BUTTON, CB_MENU)])
     return kb.inline_keyboard(rows)
 
 
 # --- Мастер «Добавить афишу» ----------------------------------------------------------------
-# add:steps | add:back | add:cancel | add:skip | add:send | add:org:<id|0> | add:loc:<id>
+# add:back | add:cancel | add:skip | add:send | add:org:<id|0> | add:loc:<id>
 # add:venue:<id|new> | add:cat:<slug> | add:price:<free|donation> | add:edit:<шаг>
 
-CB_ADD_STEPS = f"{P_ADD}:steps"
 CB_ADD_BACK = f"{P_ADD}:back"
 CB_ADD_CANCEL = f"{P_ADD}:cancel"
 CB_ADD_SKIP = f"{P_ADD}:skip"
@@ -364,11 +381,6 @@ def _add_nav(*, back: bool = True, skip: bool = False) -> list[list[kb.Button]]:
     nav.append(kb.callback(texts.ADD_CANCEL, CB_ADD_CANCEL))
     rows.append(nav)
     return rows
-
-
-def add_start() -> dict[str, Any]:
-    rows = [[kb.callback(texts.ADD_STEPS_BUTTON, CB_ADD_STEPS)], *_add_nav(back=False)]
-    return kb.inline_keyboard(rows)
 
 
 def add_step(*, back: bool = True, skip: bool = False) -> dict[str, Any]:
@@ -426,21 +438,27 @@ def add_preview(steps: Sequence[str]) -> dict[str, Any]:
 P_MOD = "mod"  # mod:<e|v>:<id>:<approve|reject> — кнопки в уведомлении модератору
 
 
-def moderation_alert(kind: str, entity_id: int, url: str | None) -> dict[str, Any]:
+def moderation_alert(
+    kind: str, entity_id: int, web_app: str | None, payload: str
+) -> dict[str, Any]:
     rows: list[list[kb.Button]] = [
         [
             kb.callback(texts.MOD_APPROVE, f"{P_MOD}:{kind}:{entity_id}:approve"),
             kb.callback(texts.MOD_REJECT, f"{P_MOD}:{kind}:{entity_id}:reject"),
         ]
     ]
-    if url:
-        rows.append([kb.link(texts.MOD_OPEN_SITE, url)])
+    if kind == "e":
+        rows.append([kb.callback(texts.ADMIN_DELETE_BUTTON, f"{P_ADMIN}:e:{entity_id}:delete")])
+    if web_app:
+        rows.append([kb.open_app(texts.MOD_OPEN_APP, web_app, payload)])
     return kb.inline_keyboard(rows)
 
 
-def moderation_closed(url: str | None) -> dict[str, Any] | None:
-    """После решения кнопки убираем, ссылку на карточку оставляем."""
-    return kb.inline_keyboard([[kb.link(texts.MOD_OPEN_SITE, url)]]) if url else None
+def moderation_closed(web_app: str | None, payload: str | None) -> dict[str, Any] | None:
+    """После решения кнопки убираем, карточку в мини-приложении оставляем."""
+    if not web_app or not payload:
+        return None
+    return kb.inline_keyboard([[kb.open_app(texts.MOD_OPEN_APP, web_app, payload)]])
 
 
 # --- Профиль организации ------------------------------------------------------------------
@@ -461,18 +479,10 @@ def org_events_payload(
     return f"{P_ORG_PUBLIC}:ev:{org_id}:{tier}:{offset}" + (f":{cursor}" if cursor else "")
 
 
-def _org_site(label: str, org_id: int, url: str | None, web_app: str | None) -> kb.Button | None:
-    if url:
-        return kb.link(label, url)
-    if web_app:
-        return kb.open_app(label, web_app, f"org_{org_id}")
-    return None
-
-
 def org_profile(
-    org_id: int, *, url: str | None, web_app: str | None, official: int, community: int
+    org_id: int, *, web_app: str | None, official: int, community: int
 ) -> dict[str, Any]:
-    """[Афиши организации] (лента с событиями), [От сообщества], [Открыть на сайте], [Меню]."""
+    """[Афиши организации] (лента с событиями), [От сообщества], [В приложении], [Меню]."""
     rows: list[list[kb.Button]] = []
     if official or not community:
         label = texts.ORG_EVENTS_BUTTON.format(count=official)
@@ -480,9 +490,8 @@ def org_profile(
     if community:
         label = texts.ORG_COMMUNITY_BUTTON.format(count=community)
         rows.append([kb.callback(label, org_events_payload(org_id, "c"))])
-    site = _org_site(texts.ORG_SITE_BUTTON, org_id, url, web_app)
-    if site is not None:
-        rows.append([site])
+    if web_app:
+        rows.append([kb.open_app(texts.ORG_SITE_BUTTON, web_app, f"org_{org_id}")])
     rows.append([kb.callback(texts.MENU_BUTTON, CB_MENU)])
     return kb.inline_keyboard(rows)
 

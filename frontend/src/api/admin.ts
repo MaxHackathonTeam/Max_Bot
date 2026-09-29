@@ -77,6 +77,10 @@ export const decideEvent = (id: number, action: EventAction, reason: string | nu
     body: JSON.stringify({ action, reason }),
   });
 
+/** Удалить событие целиком (чистка афиши): DELETE /admin/events/{id}. */
+export const deleteAdminEvent = (id: number, reason: string | null) =>
+  api<void>(`/admin/events/${id}${reason ? `?${new URLSearchParams({ reason })}` : ""}`, { method: "DELETE" });
+
 export const decideVerification = (id: number, approve: boolean, reason: string | null) =>
   api<unknown>(`/admin/verifications/${id}/decision`, {
     method: "POST",

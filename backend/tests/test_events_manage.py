@@ -85,6 +85,15 @@ async def _moderate(db_app: FastAPI, event_id: int) -> str | None:
         return await moderation.moderate_event(session, event_id, notifier=MemoryNotifier())
 
 
+async def _approve(db_client: httpx.AsyncClient, event_id: int) -> None:
+    """Публикует только администратор (§6)."""
+    admin, _ = await login_as(db_client, 777)
+    r = await db_client.post(
+        f"/api/v1/admin/events/{event_id}/decision", json={"action": "approve"}, headers=admin
+    )
+    assert r.status_code == 204, r.text
+
+
 async def test_community_flow_by_rules(
     db_app: FastAPI, db_client: httpx.AsyncClient, db_session: AsyncSession
 ) -> None:
@@ -112,8 +121,11 @@ async def test_community_flow_by_rules(
     assert [j.args[0] for j in jobs.named(MODERATE_EVENT)] == [event["id"]]
     assert (await db_client.post(f"{url}/submit", headers=author)).status_code == 409
 
-    assert await _moderate(db_app, event["id"]) == "published"
-    # Повторная задача ничего не меняет.
+    # Чистое по правилам событие не публикуется само — ждёт администратора.
+    assert await _moderate(db_app, event["id"]) == "pending"
+    assert (await db_client.get(url)).status_code == 404
+    await _approve(db_client, event["id"])
+    # Задача после решения ничего не меняет.
     assert await _moderate(db_app, event["id"]) is None
     public = await db_client.get(url)
     assert public.status_code == 200 and public.json()["trust_tier"] == "community"
@@ -122,7 +134,7 @@ async def test_community_flow_by_rules(
             ModerationDecision.entity_type == "event", ModerationDecision.entity_id == event["id"]
         )
     )
-    assert set(decisions) == {"rules"}
+    assert set(decisions) == {"rules", "admin"}
 
     mine = (await db_client.get("/api/v1/me/events", headers=author)).json()
     assert [(e["id"], e["status"]) for e in mine] == [(event["id"], "published")]
@@ -225,12 +237,14 @@ async def test_official_flow_and_team(
     )
     assert event["trust_tier"] == "official" and event["can_pushkin"] is True
     r = await db_client.post(f"/api/v1/events/{event['id']}/submit", headers=owner)
-    assert r.status_code == 200 and r.json()["status"] == "published"
-    assert r.json()["published_at"] is not None
+    # Официальное тоже ждёт модератора: сразу не публикуется.
+    assert r.status_code == 200 and r.json()["status"] == "pending"
+    assert (await db_client.get(f"/api/v1/events/{event['id']}")).status_code == 404
+    assert await _moderate(db_app, event["id"]) == "pending"
+    await _approve(db_client, event["id"])
     assert (await db_client.get(f"/api/v1/events/{event['id']}")).json()["pushkin_card"] is True
-
-    # Официальное событие правила не скрывают — только фиксируют решение.
-    assert await _moderate(db_app, event["id"]) == "published"
+    manage = await db_client.get(f"/api/v1/events/{event['id']}/manage", headers=owner)
+    assert manage.json()["published_at"] is not None
     listed = (
         await db_client.get(
             f"/api/v1/orgs/{org_id}/events", params={"status": "published"}, headers=owner
@@ -243,6 +257,20 @@ async def test_official_flow_and_team(
     assert (
         await db_client.delete(f"/api/v1/events/{event['id']}", headers=owner)
     ).status_code == 409
+
+
+async def test_admin_delete_event(db_client: httpx.AsyncClient, db_session: AsyncSession) -> None:
+    _, venue_id = await _place(db_session)
+    author, _ = await login_as(db_client)
+    event = await _create(db_client, author, _body(venue_id))
+    url = f"/api/v1/admin/events/{event['id']}"
+    assert (await db_client.delete(url, headers=author)).status_code == 403
+    admin, _ = await login_as(db_client, 777)
+    r = await db_client.delete(url, params={"reason": "Дубль"}, headers=admin)
+    assert r.status_code == 204
+    assert await db_session.get(Event, event["id"]) is None
+    r = await db_client.delete(url, headers=admin)
+    assert r.status_code == 404 and r.json()["error"]["code"] == "event_not_found"
 
 
 async def test_delete_draft(db_client: httpx.AsyncClient, db_session: AsyncSession) -> None:
@@ -263,6 +291,7 @@ async def test_reports_hide_event(
     event = await _create(db_client, author, _body(venue_id))
     await db_client.post(f"/api/v1/events/{event['id']}/submit", headers=author)
     await _moderate(db_app, event["id"])
+    await _approve(db_client, event["id"])
     url = f"/api/v1/events/{event['id']}/report"
 
     first, _ = await login_as(db_client)
