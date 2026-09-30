@@ -624,4 +624,3 @@ docker compose -f compose.yaml -f compose.prod.yaml up -d --build
   скриптом [`tools/build_localities.py`](tools/build_localities.py) из выгрузки Geofabrik.
 - **Сторонний код:** только открытые библиотеки со свободными лицензиями (MIT, BSD, Apache 2.0 и другие), полный
   список — в lock-файлах. Шрифты Onest и Unbounded распространяются по SIL Open Font License.
-- **Код проекта:** ⟨ЗАПОЛНИТЬ: лицензия проекта, например MIT, и файл LICENSE⟩.
