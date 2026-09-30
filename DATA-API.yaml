@@ -1,16 +1,30 @@
 version: "1.0"
 service: afisha-ryadom
-base_url: "http://localhost:8000/api/v1"
+base_url: "https://vse-vezde.ru/api/v1"
+# Локальный запуск: http://localhost:8000/api/v1
 authentication:
   review_login:
     method: POST
     path: /auth/review-login
     roles: [user, org_owner_verified, org_owner_unverified, admin]
     expected_status: [200, 401, 404]
+    accounts:
+      user: jury_resident
+      org_owner_verified: jury_museum
+      org_owner_unverified: jury_organizer
+      admin: jury_admin
+    passwords: "на служебном слайде презентации"
+    token: "Authorization: Bearer <access_token>, действует 12 часов"
+  consents:
+    note: "Перед POST /drafts/from-text, /events, /events/{id}/save принять terms и privacy; перед POST /orgs — ещё org_pd"
+    method: POST
+    path: /me/consents
+    body: {"docs": ["terms", "privacy"]}
+    expected_status: [200]
 checks:
   - {method: GET, path: /health, role: anonymous, expected: [200], response: "{status}"}
   - {method: GET, path: /events, role: anonymous, expected: [200], response: "items,next_cursor"}
-  - {method: GET, path: /events/{id}, role: anonymous, expected: [200, 404], response: "id,title,sessions"}
+  - {method: GET, path: "/events/{id}", role: anonymous, expected: [200, 404], response: "id,title,sessions"}
   - {method: GET, path: /localities, role: anonymous, expected: [200], response: "array of localities"}
   - {method: GET, path: /categories, role: anonymous, expected: [200], response: "array of categories"}
   - {method: POST, path: /search/parse, role: anonymous, expected: [200, 422], response: "date,free,price_max,categories,locality_id,q,chips"}
@@ -19,7 +33,7 @@ checks:
   - {method: POST, path: /auth/web-code/poll, role: anonymous, expected: [200, 202, 410], response: "status | access_token,user"}
   - {method: POST, path: /drafts/from-text, role: user, expected: [201, 401, 422], response: "id,status"}
   - {method: POST, path: /events, role: user, expected: [201, 401, 403, 422], response: "id,status"}
-  - {method: POST, path: /events/{id}/save, role: user, expected: [200, 401, 404], response: "saved_session_ids"}
+  - {method: POST, path: "/events/{id}/save", role: user, expected: [200, 401, 404], response: "saved_session_ids"}
   - {method: GET, path: /orgs/mine, role: user, expected: [200, 401], response: "array of organizations"}
   - {method: POST, path: /orgs, role: user, expected: [201, 401, 422], response: "id,name"}
   - {method: GET, path: /admin/queue, role: admin, expected: [200, 401, 403], response: "events,verifications"}
@@ -29,4 +43,4 @@ notes:
   - "Демо-события помечены source=demo и trust_tier=demo."
   - "Разбор поиска и черновиков — детерминированные правила; внешних сервисов, кроме MAX, нет."
   - "Сайт без MAX: чтение без токена, гостевой токен /auth/guest (30 дней), вход через код в боте."
-  - "Адрес production API и review-пароли передаются жюри отдельно, в репозитории их нет."
+  - "Пароли тестовых учёток — на служебном слайде презентации, в репозитории их нет."
